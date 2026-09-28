@@ -1,0 +1,79 @@
+{
+  "name": "harmful",
+  "productName": "Harmful",
+  "version": "1.0.5",
+  "description": "Harmful: suas contas de jogos organizadas e protegidas — logins, senhas, nicks, ranks e skins.",
+  "main": "src/main.js",
+  "author": "Harmful",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable --x64"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "br.harmful.app",
+    "productName": "Harmful",
+    "copyright": "Harmful",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Harmful",
+      "installerLanguages": [
+        "pt_BR"
+      ],
+      "language": "1046",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Harmful-Instalador-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "Harmful-Portatil-${version}.exe"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "tulinmendes2-prog",
+        "repo": "harmful",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tulinmendes2-prog/harmful.git"
+  }
+}
