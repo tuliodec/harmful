@@ -63,7 +63,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "harmxxx",
+        "owner": "tuliodec",
         "repo": "harmful",
         "releaseType": "release"
       }
@@ -74,6 +74,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/harmxxx/harmful.git"
+    "url": "https://github.com/tuliodec/harmful.git"
   }
 }
