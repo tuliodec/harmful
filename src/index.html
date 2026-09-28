@@ -999,6 +999,8 @@ const PLATFORMS = [
   { id: 'supercell', name: 'Supercell ID', short: 'SC', color: '#34343c' },
   { id: 'google', name: 'Google Play Games', short: 'GP', color: '#0b7a45' },
   { id: 'apple', name: 'Apple / Game Center', short: 'AP', color: '#4b4b55' },
+  { id: 'minecraft', name: 'Minecraft', short: 'MC', color: '#2f6b1f' },
+  { id: 'outlook', name: 'Outlook', short: 'OL', color: '#0a5fb8' },
   { id: 'outro', name: 'Outra plataforma', short: '??', color: '#5b6275' }
 ];
 const PLATFORM_MAP = Object.fromEntries(PLATFORMS.map(p => [p.id, p]));
@@ -1063,7 +1065,7 @@ const GAMES = [
   { name: 'The Finals', platform: 'steam', aliases: ['finals'] },
   { name: 'Grand Theft Auto V', platform: 'rockstar', aliases: ['gta', 'gta v', 'gta 5', 'gta5', 'gta online', 'gtav'] },
   { name: 'Red Dead Redemption 2', platform: 'rockstar', aliases: ['rdr2', 'red dead'] },
-  { name: 'Minecraft', platform: 'xbox', aliases: ['mine', 'mc'] },
+  { name: 'Minecraft', platform: 'minecraft', aliases: ['mine', 'mc'] },
   { name: 'Roblox', platform: 'roblox' },
   { name: 'Genshin Impact', platform: 'hoyoverse', aliases: ['genshin'] },
   { name: 'Honkai: Star Rail', platform: 'hoyoverse', aliases: ['hsr', 'star rail', 'honkai star rail'] },
@@ -1783,6 +1785,7 @@ function normalizeVault(v) {
       lockOnMinimize: !!s.lockOnMinimize,
       mcAutoRefresh: s.mcAutoRefresh !== false,
       mcOptifine: s.mcOptifine !== false,
+      platMig: !!s.platMig,
       defaultRecoveryEmail: typeof s.defaultRecoveryEmail === 'string' ? str(s.defaultRecoveryEmail, 200).trim() : DEFAULT_SETTINGS.defaultRecoveryEmail,
       lastBackupAt: validISO(s.lastBackupAt) || null
     },
@@ -2361,6 +2364,22 @@ async function refreshMcProfiles(force, onProgress) {
   if (visible) toast(visible === 1 ? 'Skin atualizada' : visible + ' skins atualizadas');
   return { total: ids.length, changed: visible, error };
 }
+// 1.0.6: contas que estavam como "Xbox / Microsoft" por falta de opção melhor:
+// com o jogo Minecraft → "Minecraft"; só e-mail @outlook/@hotmail/@live/@msn, sem jogo → "Outlook". Uma vez só.
+function migratePlatforms() {
+  if (!S.unlocked || S.vault.settings.platMig) return;
+  const isMs = x => /@(outlook|hotmail|live|msn)\./i.test(x || '');
+  let changed = 0;
+  commit(v => {
+    for (const a of v.accounts) {
+      if (a.platform !== 'xbox') continue;
+      if (a.games.some(g => g.game === 'Minecraft')) { a.platform = 'minecraft'; changed++; }
+      else if (!a.games.length && (isMs(a.login) || isMs(a.email))) { a.platform = 'outlook'; changed++; }
+    }
+    v.settings.platMig = true;
+  }, { data: changed > 0 });
+  if (changed) toast(changed === 1 ? '1 conta agora aparece como Minecraft/Outlook' : changed + ' contas agora aparecem como Minecraft/Outlook');
+}
 function startSession(s) {
   S.key = s.key; S.salt = s.salt; S.iterations = s.iterations; S.vault = s.vault; S.rev = s.rev || 0;
   S.unlocked = true; S.gen++;
@@ -2371,6 +2390,7 @@ function startSession(s) {
   renderApp();
   startAutoLock();
   Autosave.init().then(updateBackupIndicators).catch(() => {});
+  setTimeout(migratePlatforms, 300);
   if (DESKTOP) setTimeout(() => { refreshMcProfiles(false).catch(() => {}); }, 1500);
 }
 async function lock(message) {
