@@ -63,7 +63,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "tulinmendes2-prog",
+        "owner": "harmxxx",
         "repo": "harmful",
         "releaseType": "release"
       }
@@ -74,6 +74,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tulinmendes2-prog/harmful.git"
+    "url": "https://github.com/harmxxx/harmful.git"
   }
 }
