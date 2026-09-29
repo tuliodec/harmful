@@ -558,6 +558,24 @@ details.fold[open]>.fold-body{animation:rise-sm var(--t-med) var(--ease) both}
 .g-sub .nick .icon-btn{opacity:.6}
 .g-sub .nick:hover .icon-btn,.g-sub .nick .icon-btn:focus-visible{opacity:1}
 .g-note{font-size:13px;color:var(--text-2);overflow-wrap:anywhere;white-space:pre-wrap}
+/* Valorant (pelo Riot Client): uma linha de números, loja do dia, mercado noturno e skins recolhidas */
+.vsec .v-line{font-size:13.5px;color:var(--text);font-variant-numeric:tabular-nums}
+.v-h{font-size:12.5px;color:var(--text-2);margin:6px 0 2px}
+.v-offers,.v-grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.v-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;max-height:360px;overflow-y:auto;overscroll-behavior:contain;padding:6px 2px 2px 0}
+.v-offers li,.v-grid li{display:flex;flex-direction:column;gap:2px;min-width:0;padding:8px 10px;border-radius:var(--r-sm);background:var(--surface)}
+.v-pic{display:grid;place-items:center;height:46px}
+.v-grid .v-pic{height:32px}
+.v-pic img{max-width:100%;max-height:100%;object-fit:contain;-webkit-user-drag:none;user-select:none;animation:fade-in var(--t-med) var(--ease) both}
+.v-n{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v-grid .v-n{font-size:11.5px;color:var(--text-2)}
+.v-p{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.v-off{color:var(--accent-fg);font-weight:500}
+details.v-skins>summary{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2);padding:4px 0;border-radius:6px;transition:color var(--t-fast) var(--ease)}
+details.v-skins>summary:hover,details.v-skins[open]>summary{color:var(--text)}
+.v-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 0 -11px}
+.v-foot .btn[aria-busy="true"]{opacity:.6;cursor:progress}
+.v-note{font-size:11.5px;color:var(--text-3)}
 .alert-line{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--danger);margin-top:-6px}
 .alert-line .i{width:15px;height:15px}
 .alert-line.warn{color:var(--warning)}
@@ -1319,14 +1337,14 @@ const Store = {
     if (DESKTOP) return this.text;
     try { return localStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
   },
-  async set(text) {
+  async set(text, opts) {
     if (!DESKTOP) { localStorage.setItem(STORAGE_KEY, text); return; }
-    const r = await window.desktop.writeVault(text);
+    const r = await window.desktop.writeVault(text, opts);
     this.text = text;
     if (r && r.extra) {
-      const prev = Desk.extra.state;
+      const prev = Desk.extra;
       Desk.extra = r.extra;
-      if (prev !== r.extra.state) updateBackupIndicators();
+      if (prev.state !== r.extra.state || prev.code !== r.extra.code) updateBackupIndicators();
     }
   },
   async remove() {
@@ -1752,6 +1770,34 @@ function mountSpin(el) {
   });
 }
 
+// Valorant lido do Riot Client (veja "Valorant" em Detalhes da conta): só o retrato da última leitura, com limites
+const VAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function normalizeValorant(v) {
+  if (!v || typeof v !== 'object' || !VAL_UUID_RE.test(String(v.puuid || ''))) return null;
+  const n = (x, max) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? Math.min(Math.floor(x), max) : null);
+  const o = x => (x && typeof x === 'object' ? x : null);
+  const shop = (s, night) => {
+    if (!o(s) || !Array.isArray(s.offers)) return null;
+    const offers = s.offers.slice(0, 8).filter(x => o(x) && VAL_UUID_RE.test(String(x.uuid || ''))).map(x => {
+      const y = { uuid: x.uuid, name: str(x.name, 80), cost: n(x.cost, 1e6) };
+      if (night) y.discount = n(x.discount, 100);
+      return y;
+    });
+    return offers.length ? { offers, endsAt: validISO(s.endsAt) } : null;
+  };
+  const r = o(v.rank), w = o(v.wallet), seen = new Set();
+  return {
+    puuid: v.puuid, riotId: str(v.riotId, 40).trim(), shard: ['na', 'eu', 'ap', 'kr', 'pbe'].includes(v.shard) ? v.shard : '',
+    at: validISO(v.at),
+    rank: r ? { tier: n(r.tier, 99) || 0, name: str(r.name, 40), rr: n(r.rr, 10000) } : null,
+    level: n(v.level, 1e6),
+    wallet: w ? { vp: n(w.vp, 1e9) || 0, rad: n(w.rad, 1e9) || 0, kc: n(w.kc, 1e9) || 0 } : null,
+    store: shop(v.store, false), night: shop(v.night, true),
+    skins: (Array.isArray(v.skins) ? v.skins.slice(0, 6000) : [])
+      .filter(s => o(s) && VAL_UUID_RE.test(String(s.uuid || '')) && !seen.has(s.uuid) && seen.add(s.uuid))
+      .slice(0, 3000).map(s => ({ uuid: s.uuid, name: str(s.name, 80) }))
+  };
+}
 function normalizeAccount(a) {
   a = a && typeof a === 'object' ? a : {};
   const t = nowISO();
@@ -1777,8 +1823,15 @@ function normalizeAccount(a) {
       id: str(f.id, 64) || uid(), name: str(f.name, 80), value: str(f.value, 5000), secret: !!f.secret
     })).filter(f => f.name || f.value).slice(0, 100) : [],
     games: Array.isArray(a.games) ? a.games.map(normalizeGame).filter(g => g.game).slice(0, 100) : [],
+    valorant: normalizeValorant(a.valorant),
     avatar: normalizeAvatar(a.avatar)
   };
+}
+// Rascunho de um formulário de conta que o bloqueio interrompeu (só existe dentro do cofre criptografado)
+function normalizeDraft(d) {
+  if (!d || typeof d !== 'object' || !d.account || typeof d.account !== 'object' || !validISO(d.at)) return null;
+  const account = normalizeAccount(d.account);
+  return { accountId: d.isNew ? null : account.id, isNew: !!d.isNew, account, at: d.at };
 }
 function normalizeVault(v) {
   v = v && typeof v === 'object' ? v : {};
@@ -1799,10 +1852,12 @@ function normalizeVault(v) {
       mcAutoRefresh: s.mcAutoRefresh !== false,
       mcOptifine: s.mcOptifine !== false,
       platMig: !!s.platMig,
+      valorantAck: validISO(s.valorantAck) || null,
       defaultRecoveryEmail: typeof s.defaultRecoveryEmail === 'string' ? str(s.defaultRecoveryEmail, 200).trim() : DEFAULT_SETTINGS.defaultRecoveryEmail,
       lastBackupAt: validISO(s.lastBackupAt) || null
     },
-    accounts
+    accounts,
+    draft: normalizeDraft(v.draft)
   };
 }
 function blankGame(name) {
@@ -2073,7 +2128,9 @@ function wireAvatarField(form, base) {
     let fixedSrc = r.src;
     try { fixedSrc = await fixLegacySkin(r.src); } catch (err) { /* usa como veio */ }
     if (my !== tok || !form.isConnected) return;
-    const av = normalizeAvatar({ type: 'mcskin', src: fixedSrc, model: r.model, name: r.name, uuid: r.uuid, fetchedAt: nowISO(), capes: r.capes, cape: avatar && avatar.type === 'mcskin' && avatar.capes ? avatar.cape : undefined });
+    const same = avatar && avatar.type === 'mcskin' && avatar.uuid && avatar.uuid === r.uuid; // outro nick: as capas antigas (e a escolha) não são dele
+    const capes = mcMergeCapes(same ? avatar.capes : null, r);
+    const av = normalizeAvatar({ type: 'mcskin', src: fixedSrc, model: r.model, name: r.name, uuid: r.uuid, fetchedAt: nowISO(), capes, cape: same && avatar.capes ? avatar.cape : undefined });
     if (!av) { setMsg('A skin recebida não é válida.', true); return; }
     if (r.name && nickInp.value.trim() !== r.name && nickInp.value.trim().toLowerCase() === String(r.name).toLowerCase()) {
       nickInp.value = r.name;
@@ -2081,7 +2138,8 @@ function wireAvatarField(form, base) {
     }
     set(av);
     const capeNames = av.capes ? [av.capes.optifine ? 'OptiFine' : '', av.capes.mojang ? 'Mojang' : ''].filter(Boolean) : [];
-    setMsg('Skin de ' + (av.name || nick) + ' carregada' + (capeNames.length ? ' · capa ' + capeNames.join(' e ') : '') + '.');
+    const unsure = !!r.capeErrors && ['mojang', 'optifine'].some(k => r.capeErrors[k] && !(av.capes && av.capes[k]));
+    setMsg('Skin de ' + (av.name || nick) + ' carregada' + (capeNames.length ? ' · capa ' + capeNames.join(' e ') : '') + (unsure ? ' · não foi possível verificar a capa agora' : '') + '.');
   };
   const fetchSteam = async () => {
     if (!canFetchSteam()) return;
@@ -2234,21 +2292,30 @@ try {
 /* =========================================================
    Persistência
    ========================================================= */
-function persist() {
+// Cópia forçada pedida (restaurar, importar, trocar a senha): vai junto na próxima gravação desta sessão e só é
+// esquecida quando ela dá certo, para o cofre nunca ser trocado sem uma cópia do estado anterior.
+const pendingSnapshots = new Map(); // S.gen → prefixo (o primeiro pedido da sessão vale)
+function persist(opts) {
   if (!S.unlocked) return Promise.resolve();
+  const gen = S.gen;
+  if (opts && opts.snapshot && !pendingSnapshots.has(gen)) pendingSnapshots.set(gen, opts.snapshot);
   S.vault.updatedAt = nowISO();
   const job = saveChain.then(async () => {
     if (!S.key || !S.vault) return;
     S.rev += 1;
+    // pedido de uma sessão já bloqueada que não conseguiu gravar: aquele cofre em memória foi descartado
+    for (const g of pendingSnapshots.keys()) if (g < gen) pendingSnapshots.delete(g);
+    const snap = pendingSnapshots.get(gen); // lido junto com o cofre que vai ser criptografado
     const env = await encryptVault(S.key, S.salt, S.iterations, S.vault, S.rev);
     const text = JSON.stringify(env);
     try {
-      await Store.set(text);
+      await Store.set(text, snap ? { snapshot: snap } : undefined);
     } catch (e) {
       const msg = String((e && e.message) || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
       toast(e && e.name === 'QuotaExceededError' ? 'Sem espaço no navegador para salvar. Baixe um backup agora!' : 'Não foi possível salvar: ' + msg, 'error');
       throw e;
     }
+    if (snap && pendingSnapshots.get(gen) === snap) pendingSnapshots.delete(gen);
     if (!DESKTOP) Autosave.schedule(text);
   });
   saveChain = job.catch(() => {});
@@ -2260,7 +2327,7 @@ function commit(mutator, opts) {
   if (opts.data !== false) S.vault.dataChangedAt = nowISO();
   auditCache = null;
   rerender();
-  return persist().catch(() => {});
+  return persist(opts).catch(() => {});
 }
 
 /* ---------- Backup automático em arquivo (Chrome/Edge) ---------- */
@@ -2356,6 +2423,12 @@ const Autosave = {
 /* =========================================================
    Sessão: criar, desbloquear, bloquear
    ========================================================= */
+// Capas vindas do processo principal. capeErrors[lado] = não deu para saber (tempo esgotado, servidor fora do ar):
+// fica a capa já guardada daquele lado, para uma falha passageira não apagar a capa nem a escolha da pessoa.
+function mcMergeCapes(prev, r) {
+  const err = (r && r.capeErrors) || {}, got = (r && r.capes) || {}, old = prev || {};
+  return { mojang: (err.mojang ? old.mojang : got.mojang) || null, optifine: (err.optifine ? old.optifine : got.optifine) || null };
+}
 /* Atualiza skins/capas/nick das contas de Minecraft pelo UUID (como o NameMC acompanha trocas de nick). */
 let mcRefreshRunning = false;
 async function refreshMcProfiles(force, onProgress) {
@@ -2375,15 +2448,22 @@ async function refreshMcProfiles(force, onProgress) {
       if (!alive()) return null;
       const a = findAccount(ids[i]);
       if (!a || !a.avatar || a.avatar.type !== 'mcskin' || !a.avatar.uuid) continue;
+      const uuid = a.avatar.uuid;
       let r;
-      try { r = await window.desktop.refreshMinecraftProfile(a.avatar.uuid, { optifine: S.vault.settings.mcOptifine !== false }); } catch (e) { r = { ok: false, error: 'network' }; }
+      try { r = await window.desktop.refreshMinecraftProfile(uuid, { optifine: S.vault.settings.mcOptifine !== false }); } catch (e) { r = { ok: false, error: 'network' }; }
       if (!alive()) return null;
       if (onProgress) onProgress(i + 1, ids.length);
-      if (!r || !r.ok) { if (!r || r.error === 'network') { error = true; break; } continue; }
+      if (!r || !r.ok) {
+        if (!r || r.error === 'network') { error = true; break; }
+        // Skin padrão: sem textura nova, mas o nick pode ter mudado; guarda a hora da consulta mesmo assim
+        if (r.defaultSkin) updates.set(a.id, { uuid, keep: true, name: r.name });
+        continue;
+      }
+      if (r.capeErrors && (r.capeErrors.mojang || r.capeErrors.optifine)) error = true; // capa ficou como estava
       let src = r.src;
       try { src = await fixLegacySkin(r.src); } catch (e) { /* usa como veio */ }
       if (!alive()) return null;
-      updates.set(a.id, { src, model: r.model, name: r.name, capes: r.capes });
+      updates.set(a.id, { uuid, src, model: r.model, name: r.name, capes: r.capes, capeErrors: r.capeErrors });
       if (i < ids.length - 1) await new Promise(res => setTimeout(res, 1000));
     }
   } finally {
@@ -2396,9 +2476,10 @@ async function refreshMcProfiles(force, onProgress) {
   const next = new Map();
   for (const [id, u] of updates) {
     const a = findAccount(id);
-    if (!a || !a.avatar || a.avatar.type !== 'mcskin') continue;
+    if (!a || !a.avatar || a.avatar.type !== 'mcskin' || a.avatar.uuid !== u.uuid) continue; // trocou de skin durante a busca
     const cur = a.avatar;
-    const nv = normalizeAvatar({ type: 'mcskin', src: u.src, model: u.model, name: u.name || cur.name, uuid: cur.uuid, fetchedAt: t, capes: u.capes, cape: cur.capes ? cur.cape : undefined });
+    const nv = normalizeAvatar(u.keep ? Object.assign({}, cur, { name: u.name || cur.name, fetchedAt: t })
+      : { type: 'mcskin', src: u.src, model: u.model, name: u.name || cur.name, uuid: cur.uuid, fetchedAt: t, capes: mcMergeCapes(cur.capes, u), cape: cur.capes ? cur.cape : undefined });
     if (!nv) continue;
     const changed = cur.src !== nv.src || cur.model !== nv.model || cur.name !== nv.name || JSON.stringify(cur.capes || null) !== JSON.stringify(nv.capes || null);
     if (changed) visible++;
@@ -2409,8 +2490,8 @@ async function refreshMcProfiles(force, onProgress) {
       const a = findAccount(id);
       if (!a) continue;
       a.avatar = x.nv;
+      // Sem mexer em a.updatedAt: é uma atualização automática, não uma edição (a mesclagem de backups compara essa data).
       if (x.changed) {
-        a.updatedAt = t;
         if (x.nv.name && x.oldName && x.nv.name !== x.oldName) {
           const mcRows = a.games.filter(g => g.game === 'Minecraft');
           const row = mcRows.find(g => g.nickname.toLowerCase() === x.oldName.toLowerCase()) || mcRows[0];
@@ -2517,12 +2598,57 @@ function startSession(s) {
   document.body.classList.remove('gate-mode');
   renderApp();
   startAutoLock();
+  if (S.vault.draft) setTimeout(offerDraft, 400, S.gen);
   Autosave.init().then(updateBackupIndicators).catch(() => {});
   setTimeout(migratePlatforms, 300);
   if (DESKTOP) setTimeout(() => { refreshProfiles(false).catch(() => {}); }, 1500);
 }
+/* Rascunho: formulário de conta aberto e alterado na hora do bloqueio. Vai para dentro do cofre (criptografado)
+   antes de a chave ser apagada (lock() espera o saveChain) e é oferecido de volta no próximo desbloqueio. */
+const draftGetters = new WeakMap(); // <dialog> do formulário → () => rascunho ou null
+const DRAFT_MAX_AGE = 7 * 864e5;
+function saveDraftOnLock() {
+  let draft = null;
+  for (const dlg of $$('dialog')) {
+    const get = draftGetters.get(dlg);
+    if (get) { try { draft = get() || draft; } catch (e) { /* ignora */ } }
+  }
+  if (!draft) return;
+  if (!DESKTOP) {
+    // Navegador: outra aba pode ter apagado o cofre ou trocado a senha mestra; aí não grava por cima
+    let env = null;
+    try { env = readStoredEnvelope(); } catch (e) { env = null; }
+    if (!env || env.kdf.salt !== bytesToB64(S.salt) || env.kdf.iterations !== S.iterations) return;
+  }
+  S.vault.draft = draft;
+  persist().catch(() => {});
+}
+async function offerDraft(gen) {
+  if (!S.unlocked || S.gen !== gen || !S.vault.draft) return;
+  const dr = S.vault.draft;
+  const drop = () => {
+    const cur = S.vault && S.vault.draft;
+    if (cur && cur.at === dr.at && cur.account.id === dr.account.id) { S.vault.draft = null; persist().catch(() => {}); }
+  };
+  if (!(Date.now() - Date.parse(dr.at) < DRAFT_MAX_AGE)) { drop(); return; }
+  const acc = dr.accountId ? findAccount(dr.accountId) : null;
+  const who = acc || (dr.isNew ? null : dr.account);
+  const choice = await choiceDialog({
+    title: 'Edição não salva',
+    message: who ? html`O cofre bloqueou enquanto você editava <strong>${idTitle(who)}</strong>.` : 'O cofre bloqueou enquanto você criava uma conta.',
+    choices: [
+      { id: 'restore', label: 'Continuar editando', desc: 'Reabre o formulário do jeito que estava.' },
+      { id: 'discard', label: 'Descartar', desc: acc ? 'A conta fica como estava antes.' : dr.isNew ? 'A conta nova não é criada.' : 'As alterações são apagadas.', danger: true }
+    ]
+  });
+  // Fechou sem escolher (ou bloqueou de novo): o rascunho fica e volta no próximo desbloqueio
+  if (!choice || !S.unlocked || S.gen !== gen) return;
+  drop();
+  if (choice === 'restore') openAccountForm(acc ? acc.id : null, { draft: dr.account, template: dr.account });
+}
 async function lock(message) {
   if (!S.unlocked) return;
+  try { saveDraftOnLock(); } catch (e) { /* o bloqueio nunca pode falhar por causa do rascunho */ }
   S.unlocked = false;
   const gen = ++S.gen;
   $$('dialog').forEach(d => { try { d.close(); } catch (e) { /* ignora */ } });
@@ -2539,10 +2665,22 @@ function markActivity() { lastActivity = Date.now(); }
 ['pointerdown', 'keydown', 'wheel', 'touchstart', 'mousemove', 'scroll'].forEach(ev => window.addEventListener(ev, markActivity, { passive: true, capture: true }));
 function startAutoLock() { stopAutoLock(); lastActivity = Date.now(); lockTimer = setInterval(checkAutoLock, 5000); }
 function stopAutoLock() { if (lockTimer) clearInterval(lockTimer); lockTimer = null; }
-function checkAutoLock() {
-  if (!S.unlocked || !S.vault) return;
+// App do Windows: vale o tempo sem usar o computador (teclado e mouse em qualquer programa, inclusive um jogo em
+// tela cheia), não só esta janela. No navegador (ou se o app não responder), o tempo sem usar esta página.
+const SYS_IDLE = DESKTOP && typeof window.desktop.systemIdle === 'function';
+async function checkAutoLock() {
+  if (!S.unlocked || !S.vault || !S.vault.settings.autoLockMin) return;
+  let idle = Date.now() - lastActivity;
+  if (SYS_IDLE) {
+    const gen = S.gen;
+    try {
+      const sec = Number(await window.desktop.systemIdle());
+      if (Number.isFinite(sec) && sec >= 0) idle = sec * 1000;
+    } catch (e) { /* ignora */ }
+    if (!S.unlocked || S.gen !== gen) return;
+  }
   const min = S.vault.settings.autoLockMin;
-  if (min && Date.now() - lastActivity >= min * 60000) lock('Cofre bloqueado automaticamente por inatividade.');
+  if (min && idle >= min * 60000) lock('Cofre bloqueado automaticamente por inatividade.');
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkAutoLock(); });
 
@@ -2917,6 +3055,7 @@ function renderUnlock(message) {
     err.textContent = '';
     const pw = inp.value;
     try {
+      await saveChain;
       const cur = readStoredEnvelope();
       if (!cur) { renderSetup('O cofre foi apagado em outra aba.'); return; }
       const r = await openEnvelope(pw, cur);
@@ -3133,7 +3272,7 @@ function renderApp() {
     <header class="topbar">
       <div class="brand" title="Harmful">${LOGO}<span class="sr-only">Harmful</span></div>
       <nav class="tabs-wrap" aria-label="Seções"><div id="tabs"></div><span class="tab-ink" id="tab-ink" aria-hidden="true"></span></nav>
-      <div class="search" role="search">${icon('search')}<input id="search" type="search" placeholder="Buscar" aria-label="Buscar contas (Ctrl+K)" title="Buscar por nick, jogo, login ou rank (Ctrl+K)" autocomplete="off" spellcheck="false"></div>
+      <div class="search" role="search">${icon('search')}<input id="search" type="search" placeholder="Buscar" aria-label="Buscar contas (Ctrl+K)" title="Buscar por nick, jogo, login ou rank (Ctrl+K)&#10;Enter abre a 1ª conta · Ctrl+Enter copia a senha · Shift+Enter, o login" autocomplete="off" spellcheck="false"></div>
       <div class="top-actions">
         <button type="button" class="btn primary new" data-act="new-account" title="Nova conta (N)" aria-label="Nova conta">${icon('plus')}</button>
         <div class="pop-wrap" id="more-wrap">
@@ -3149,14 +3288,7 @@ function renderApp() {
   inkView = null;
   const s = $('#search');
   s.value = ui.search;
-  s.addEventListener('input', debounce(() => {
-    if (!S.unlocked) return;
-    ui.search = s.value;
-    ui.animate = ui.view !== 'accounts' ? 'full' : 'flip';
-    if (ui.view !== 'accounts') ui.view = 'accounts';
-    renderSidebar();
-    renderMain();
-  }, 90));
+  s.addEventListener('input', debounce(applySearch, 90));
   rerender();
 }
 function rerender() {
@@ -3476,9 +3608,12 @@ function gameLineHTML(a) {
   const restText = rest.map(x => x.game + (x.rank ? ' (' + x.rank + ')' : '')).join(', ');
   return html`<span class="card-game" title="${games.map(x => x.game + (x.rank ? ' — ' + x.rank : '')).join('\n')}"><span class="sr-only">${platformName(a)} · </span>${g.game}${g.rank ? html`<span class="sep" aria-hidden="true">·</span><span class="rk">${g.rank}</span>` : ''}${rest.length ? html`<span class="more" aria-hidden="true">+${rest.length}</span><span class="sr-only"> e mais ${plural(rest.length, 'jogo', 'jogos')}: ${restText}</span>` : ''}</span>`;
 }
+// Identidade da cópia rápida: o login ou, se a conta só tem e-mail (comum em Microsoft/Minecraft), o e-mail
+function loginField(a) { return a.login ? 'login' : a.email ? 'email' : ''; }
 function quickHTML(a) {
-  if (!a.login && !a.password) return '';
-  return html`<span class="quick">${a.login ? copyBtn(a.id, 'login', '', 'login', 'user') : ''}${a.password ? copyBtn(a.id, 'password', '', 'senha', 'key') : ''}</span>`;
+  const idf = loginField(a);
+  if (!idf && !a.password) return '';
+  return html`<span class="quick">${idf ? copyBtn(a.id, idf, '', idf === 'login' ? 'login' : 'e-mail', 'user') : ''}${a.password ? copyBtn(a.id, 'password', '', 'senha', 'key') : ''}</span>`;
 }
 function favBtn(a) {
   return html`<button type="button" class="icon-btn sm fav${a.favorite ? ' on' : ''}" data-act="toggle-fav" data-id="${a.id}" aria-pressed="${a.favorite ? 'true' : 'false'}" aria-label="Favorita" title="${a.favorite ? 'Remover dos favoritos' : 'Marcar como favorita'}">${icon('star')}</button>`;
@@ -3610,6 +3745,259 @@ function securityHTML() {
 /* =========================================================
    Detalhes da conta
    ========================================================= */
+/* ---------- Valorant pelo Riot Client (não oficial, só leitura, só no app do Windows) ---------- */
+// Seção discreta no detalhe: rank, nível, VP e Radianita numa linha; loja do dia; mercado noturno (se aberto);
+// skins recolhidas. Só muda pelo botão "Atualizar pelo Riot Client" (nunca sozinho). As imagens não entram no
+// cofre: vêm do cache do app (da internet só para as contas atualizadas pelo botão nesta sessão), aqui ficam só na
+// memória, e "Desvincular" apaga do cache as da conta.
+const canValorant = () => !!(window.desktop && typeof window.desktop.valorantSnapshot === 'function');
+const valUi = { busy: '' }; // conta com leitura em andamento
+const valImg = new Map(); // uuid da skin → data URL
+const valMiss = new Map(); // uuid → sem imagem agora (true: nem pela internet); não pede de novo até o próximo "Atualizar"
+const valWant = new Map(); // uuid → pode buscar na internet
+const valNet = new Map(); // conta → sessão (S.gen) em que foi atualizada pelo botão: só essas buscam imagens na internet
+let valObs = null, valTimer = 0, valMountQ = false, valLoading = false, valKeep = null;
+function valorantGame(a) {
+  return a.games.find(g => { const p = presetFor(g.game); return !!p && p.name === 'Valorant'; }) || null;
+}
+function valLeft(iso) {
+  const ms = Date.parse(iso) - Date.now();
+  if (!(ms > 0)) return '';
+  const m = Math.max(1, Math.round(ms / 60000));
+  if (m < 60) return m + ' min';
+  const h = Math.round(m / 60);
+  return h < 48 ? h + ' h' : Math.round(h / 24) + ' dias';
+}
+// Loja e mercado (poucas imagens) já vêm com a imagem no HTML; na lista de skins ela entra depois, pelo DOM
+// (com centenas em cache, repassar os data: URLs pelo HTML a cada redesenho do painel travaria a janela)
+function valPicHTML(uuid, inline) {
+  const src = inline ? valImg.get(uuid) : '';
+  return html`<span class="v-pic" data-vimg="${uuid}">${src ? html`<img src="${src}" alt="">` : ''}</span>`;
+}
+function valShopHTML(title, when, shop, night) {
+  const left = valLeft(shop.endsAt);
+  return html`<div class="v-shop"><p class="v-h">${title}${left ? html`<span class="faint"> · ${when} ${left}</span>` : ''}</p>
+    <ul class="v-offers">${shop.offers.map(o => html`<li title="${o.name}">${valPicHTML(o.uuid, true)}<span class="v-n">${o.name || 'Skin'}</span><span class="v-p">${o.cost != null ? fmtInt(o.cost) + ' VP' : ''}${night && o.discount ? html` <span class="v-off">−${o.discount}%</span>` : ''}</span></li>`)}</ul></div>`;
+}
+function valSkinsHTML(v) {
+  return html`<ul class="v-grid">${v.skins.map(s => html`<li title="${s.name}">${valPicHTML(s.uuid)}<span class="v-n">${s.name || 'Skin'}</span></li>`)}</ul>`;
+}
+// Só nas contas com a linha "Valorant" (ou já ligadas); no navegador não aparece
+function valorantSecHTML(a) {
+  if (!canValorant() || !(a.valorant || valorantGame(a))) return '';
+  const v = a.valorant, busy = valUi.busy === a.id;
+  const live = s => !!s && !(Date.parse(s.endsAt) <= Date.now()); // loja vencida some até a próxima leitura
+  const line = v ? [
+    v.rank && v.rank.name ? v.rank.name + (v.rank.rr != null ? ' · ' + fmtInt(v.rank.rr) + ' RR' : '') : '',
+    v.level != null ? 'Nível ' + fmtInt(v.level) : '',
+    v.wallet ? fmtInt(v.wallet.vp) + ' VP' : '',
+    v.wallet ? fmtInt(v.wallet.rad) + ' Radianita' : ''
+  ].filter(Boolean) : [];
+  // "Skins" só continua aberto (e na mesma rolagem) quando o painel desta conta é redesenhado; reaberto, vem fechado
+  const was = v && v.skins.length ? $('dialog:not(.closing)[data-detail-id="' + CSS.escape(a.id) + '"] details.v-skins[open]') : null;
+  const grid = was && was.querySelector('.v-grid');
+  if (grid && grid.scrollTop) valKeep = { id: a.id, top: grid.scrollTop };
+  if (!valMountQ) { valMountQ = true; queueMicrotask(valMount); } // imagens: logo que o painel for montado (antes de pintar)
+  return html`<section class="dsec vsec">
+        <h3>Valorant</h3>
+        ${line.length ? html`<p class="v-line">${line.join(' · ')}</p>` : ''}
+        ${v && live(v.store) ? valShopHTML('Loja de hoje', 'troca em', v.store, false) : ''}
+        ${v && live(v.night) ? valShopHTML('Mercado noturno', 'acaba em', v.night, true) : ''}
+        ${v && v.skins.length ? html`<details class="v-skins" data-vskins="${a.id}"${was ? raw(' open') : ''}><summary>Skins (${fmtInt(v.skins.length)})<span class="chev" aria-hidden="true"></span></summary><div class="v-skins-body">${was ? valSkinsHTML(v) : ''}</div></details>` : ''}
+        <div class="v-foot"><button type="button" class="btn sm ghost" data-act="val-refresh" data-id="${a.id}"${busy ? raw(' aria-busy="true" aria-disabled="true"') : ''}>${busy ? 'Lendo o Riot Client…' : 'Atualizar pelo Riot Client'}</button>${v && v.at ? html`<span class="small faint">atualizado ${relTime(v.at)}</span>` : ''}</div>
+        <p class="v-note">Não oficial: lê a conta logada no Riot Client.</p>
+      </section>`;
+}
+// Imagens sob demanda, em lotes pequenos: loja e mercado (poucas) logo; skins só as que aparecem na lista aberta.
+// Ao abrir o detalhe, só do cache do app; da internet só na conta atualizada pelo botão nesta sessão (valNet).
+function valNetFor(el) {
+  const d = el.closest('dialog[data-detail-id]');
+  return !!d && valNet.get(d.dataset.detailId) === S.gen;
+}
+function valSkip(uuid, net) {
+  return valMiss.has(uuid) && (valMiss.get(uuid) || !net); // já faltou desse jeito (ou até pela internet)
+}
+function valAsk(el) {
+  const id = el.dataset.vimg, net = valNetFor(el);
+  if (!valSkip(id, net)) valWant.set(id, net || !!valWant.get(id));
+}
+function valMount() {
+  valMountQ = false;
+  if (!canValorant()) return;
+  if (valKeep) {
+    const g = $('dialog[data-detail-id="' + CSS.escape(valKeep.id) + '"] .vsec .v-grid');
+    if (g) g.scrollTop = valKeep.top;
+    valKeep = null;
+  }
+  if (!valObs && typeof IntersectionObserver === 'function') {
+    valObs = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) { valObs.unobserve(e.target); valAsk(e.target); }
+      valLoadSoon();
+    }, { rootMargin: '300px 0px' });
+  }
+  if (valObs) valObs.disconnect();
+  for (const el of $$('dialog[data-detail-id] .vsec [data-vimg]')) {
+    const id = el.dataset.vimg, src = valImg.get(id);
+    if (el.firstChild) continue;
+    if (src) valPut(el, src);
+    else if (valSkip(id, valNetFor(el))) continue;
+    else if (valObs && el.closest('.v-grid')) valObs.observe(el);
+    else valAsk(el);
+  }
+  valLoadSoon();
+}
+function valPut(el, src) {
+  if (el.firstChild) return;
+  const img = document.createElement('img');
+  img.alt = '';
+  img.src = src;
+  el.appendChild(img);
+}
+function valLoadSoon() {
+  if (!valTimer && !valLoading && valWant.size) valTimer = setTimeout(valLoad, 50);
+}
+async function valLoad() {
+  valTimer = 0;
+  for (const [id, net] of valWant) if (valImg.has(id) || valSkip(id, net)) valWant.delete(id);
+  // um lote por vez: primeiro as que podem vir da internet, depois as só do cache
+  const net = [...valWant.values()].some(Boolean);
+  const ids = [...valWant.keys()].filter(id => valWant.get(id) === net).slice(0, 24);
+  if (!ids.length) return;
+  for (const id of ids) valWant.delete(id);
+  valLoading = true;
+  let r = null;
+  try { r = await window.desktop.valorantImages(ids, { net }); } catch (e) { r = null; }
+  valLoading = false;
+  for (const id of ids) {
+    const src = r && typeof r[id] === 'string' && r[id].startsWith('data:image/png;base64,') ? r[id] : '';
+    if (!src) { if (!valImg.has(id)) valMiss.set(id, net || !!valMiss.get(id)); continue; }
+    valMiss.delete(id);
+    valImg.set(id, src);
+    if (valImg.size > 800) valImg.delete(valImg.keys().next().value);
+  }
+  for (const el of $$('dialog[data-detail-id] .vsec [data-vimg]')) {
+    const src = valImg.get(el.dataset.vimg);
+    if (src) valPut(el, src);
+  }
+  valLoadSoon();
+}
+// "Skins (N)": a lista só é montada quando abre (e continua aberta quando o painel é redesenhado)
+document.addEventListener('toggle', e => {
+  const d = e.target;
+  if (!d || !d.dataset || !d.dataset.vskins || !d.open) return;
+  const a = findAccount(d.dataset.vskins), body = d.querySelector('.v-skins-body');
+  if (!a || !a.valorant || !body || body.firstChild) return;
+  setHTML(body, valSkinsHTML(a.valorant));
+  valMount();
+}, true);
+// Junta a leitura nova com a anterior: o que a Riot não respondeu agora continua como estava
+function valMerge(prev, r) {
+  const same = !!prev && prev.puuid === r.puuid;
+  const miss = new Set(Array.isArray(r.missing) ? r.missing : []);
+  const keep = part => same && miss.has(part);
+  return normalizeValorant({
+    puuid: r.puuid, riotId: r.riotId || (same ? prev.riotId : ''), shard: r.shard, at: r.at,
+    rank: keep('rank') ? prev.rank : r.rank, level: keep('level') ? prev.level : r.level, wallet: keep('wallet') ? prev.wallet : r.wallet,
+    store: keep('store') ? prev.store : r.store, night: keep('store') ? prev.night : r.night, skins: keep('skins') ? prev.skins : r.skins
+  });
+}
+const VAL_PART = { rank: 'rank', level: 'nível', wallet: 'VP', store: 'loja', skins: 'skins' };
+async function valorantRefresh(id) {
+  if (!canValorant() || valUi.busy || !S.unlocked || !findAccount(id)) return;
+  const gen = S.gen;
+  const alive = () => S.unlocked && S.gen === gen && !!findAccount(id);
+  if (!S.vault.settings.valorantAck) {
+    const ok = await confirmDialog({
+      title: 'Ler o Valorant pelo Riot Client?',
+      message: html`Isto <strong>não é oficial</strong>: o app lê a conta que está logada no Riot Client deste PC (rank, nível, VP, loja do dia e skins). Só leitura, só quando você clicar, sem usar sua senha da Riot. Nomes e imagens das skins vêm do valorant-api.com, um site da comunidade. A Riot não aprova ferramentas assim: use por sua conta e risco.`,
+      confirmText: 'Entendi, continuar'
+    });
+    if (!ok || !alive()) return;
+    commit(v => { v.settings.valorantAck = nowISO(); }, { data: false });
+  }
+  valUi.busy = id;
+  refreshDetails();
+  let r = null;
+  try { r = await window.desktop.valorantSnapshot(); } catch (e) { r = null; }
+  valUi.busy = '';
+  if (!alive()) return;
+  refreshDetails();
+  if (!r || !r.ok) { toast((r && r.message) || 'Não foi possível ler o Riot Client agora.', 'error'); return; }
+  const a = findAccount(id), cur = a.valorant;
+  // conta já ligada: só aceita a mesma conta da Riot. A recusa vem num diálogo, que também é a saída para uma conta
+  // ligada por engano ("Desvincular"); não num toast com botão: com o painel da conta aberto (modal), o toast fica
+  // inerte e o clique no botão cairia no painel por baixo.
+  if (cur && cur.puuid !== r.puuid) {
+    const unlink = await confirmDialog({
+      title: 'Outra conta no Riot Client',
+      message: html`O Riot Client está em <strong>${r.riotId || 'outra conta'}</strong>, não na conta ligada aqui${cur.riotId ? html` (<strong>${cur.riotId}</strong>)` : ''}. Troque de conta no Riot Client e tente de novo. Se esta conta foi ligada por engano, “Desvincular” apaga daqui o rank, a loja e as skins lidos; a próxima leitura liga a conta que estiver aberta no cliente.`,
+      cancelText: 'Fechar', confirmText: 'Desvincular', danger: true
+    });
+    if (unlink && alive()) valUnlink(id);
+    return;
+  }
+  if (!cur) {
+    const other = S.vault.accounts.find(x => x.id !== id && x.valorant && x.valorant.puuid === r.puuid);
+    const g = valorantGame(a), nick = g ? g.nickname.trim() : '';
+    const differs = !!nick && !!r.riotId && norm(nick) !== norm(nick.includes('#') ? r.riotId : r.riotId.split('#')[0]);
+    if (other || differs) {
+      const ok = await confirmDialog({
+        title: 'Ligar a esta conta?',
+        message: other
+          ? html`<strong>${r.riotId || 'Essa conta da Riot'}</strong> já está ligada a “${accTitle(other)}”. Ligar a esta também?`
+          : html`O Riot Client está em <strong>${r.riotId}</strong>, mas o nick salvo aqui é <strong>${nick}</strong>. Ligar mesmo assim?`,
+        confirmText: 'Ligar'
+      });
+      if (!ok || !alive()) return;
+    }
+  }
+  // "Editar" desta conta aberto no meio da leitura: ao salvar, o formulário gravaria a versão antiga por cima
+  const gids = new Set(findAccount(id).games.map(g => g.id));
+  if ($$('dialog[open] form.acc-form .game-row').some(row => gids.has(row.dataset.gid))) {
+    toast('Feche a edição desta conta e atualize o Valorant de novo.', 'error');
+    return;
+  }
+  // a pessoa pediu: as imagens desta conta que faltam no cache podem vir da internet (só nesta sessão)
+  valNet.set(id, S.gen);
+  valMiss.clear();
+  const t = nowISO();
+  commit(() => {
+    const x = findAccount(id);
+    const nv = x ? valMerge(x.valorant, r) : null;
+    if (!nv) return;
+    x.valorant = nv;
+    // Sem mexer em x.updatedAt: é uma leitura, não uma edição (a mesclagem de backups compara essa data).
+    // A data fica em valorant.at e na linha do jogo.
+    // a linha do jogo acompanha: rank atual (e o Riot ID, se o nick estava vazio)
+    const g = valorantGame(x);
+    if (g) {
+      if (nv.rank && nv.rank.tier >= 3 && nv.rank.name) g.rank = nv.rank.name;
+      if (!g.nickname.trim() && nv.riotId) g.nickname = nv.riotId;
+      g.updatedAt = t;
+    }
+  });
+  const miss = (Array.isArray(r.missing) ? r.missing : []).map(k => VAL_PART[k]).filter(Boolean);
+  toast(miss.length ? 'Valorant atualizado, menos ' + miss.join(' e ') + ' (tente de novo daqui a pouco).' : 'Valorant atualizado');
+}
+// Saída para uma conta ligada por engano (só oferecida, e já confirmada, no diálogo "Outra conta no Riot Client"):
+// apaga só o retrato do Valorant desta conta; a linha do jogo (nick e rank) fica como está
+function valUnlink(id) {
+  const a = findAccount(id);
+  if (!S.unlocked || !a || !a.valorant) return;
+  const gone = valUuids(a.valorant);
+  commit(() => { const x = findAccount(id); if (x) x.valorant = null; }); // sem mexer em x.updatedAt (ver valorantRefresh)
+  valNet.delete(id);
+  // imagens: saem do cache do app (e da memória) as que nenhuma outra conta ligada mostra
+  const keep = new Set();
+  for (const x of S.vault.accounts) if (x.valorant) for (const u of valUuids(x.valorant)) keep.add(u);
+  for (const u of gone) if (!keep.has(u)) { valImg.delete(u); valMiss.delete(u); }
+  if (typeof window.desktop.valorantPruneImages === 'function') window.desktop.valorantPruneImages([...keep]).catch(() => {});
+  toast('Valorant desvinculado de “' + accTitle(a) + '”');
+}
+// uuids das imagens de uma leitura: loja do dia, mercado noturno e skins
+function valUuids(v) {
+  return new Set([].concat(v.store ? v.store.offers : [], v.night ? v.night.offers : [], v.skins).map(s => s.uuid));
+}
 function kvRow(label, value, o) {
   o = o || {};
   if (value == null || value === '') return '';
@@ -3690,6 +4078,7 @@ function detailHTML(a, moreOpen) {
         ${g.nickname || g2(g) ? html`<div class="g-sub">${g.nickname ? html`<span class="nick">${g.nickname}${copyBtn(a.id, 'nick', g.id, 'nick')}</span>` : ''}${g2(g) ? html`<span>${g2(g)}</span>` : ''}</div>` : ''}
         ${g.notes ? html`<p class="g-note">${g.notes}</p>` : ''}
       </li>`)}</ul></section>` : ''}
+      ${valorantSecHTML(a)}
       <details class="more" data-remember="detail-more"${moreOpen ? raw(' open') : ''}><summary>Mais detalhes<span class="chev" aria-hidden="true"></span></summary>
         <div class="more-body">${more}<p class="meta-line">Adicionada em ${fmtDateTime(a.createdAt)} · Atualizada ${relTime(a.updatedAt)}</p></div>
       </details>
@@ -3956,20 +4345,39 @@ function readAccountForm(form, base, isNew) {
   if (isNew) out.createdAt = t;
   return { account: normalizeAccount(out) };
 }
+// Rascunho "do jeito que está" quando o formulário ainda não passa na validação (números inválidos e jogos sem nome ficam de fora)
+function rawAccountForm(form, base) {
+  const val = n => { const e = form.elements.namedItem(n); return e ? e.value : ''; };
+  const out = JSON.parse(JSON.stringify(base));
+  for (const k of ['platform', 'platformName', 'label', 'status', 'login', 'email', 'password', 'accountId', 'profileUrl', 'twoFA', 'phone', 'recoveryEmail', 'backupCodes', 'region', 'createdOn', 'spent', 'inventoryValue', 'notes']) out[k] = val(k);
+  if (out.password !== (base.password || '')) out.passwordUpdatedAt = out.password ? nowISO() : '';
+  out.favorite = !!(form.elements.namedItem('favorite') || {}).checked;
+  out.tags = parseTags(val('tags'));
+  out.games = $$('.game-row', form).map(row => {
+    const q = c => row.querySelector(c).value;
+    return { id: row.dataset.gid, game: canonicalGame(q('.g-game')), nickname: q('.g-nick'), rank: q('.g-rank'), peak: q('.g-peak'), level: q('.g-level'), hours: q('.g-hours'), notes: q('.g-notes') };
+  });
+  out.customFields = $$('.cf-row', form).map(row => ({ id: row.dataset.cfid, name: row.querySelector('.cf-name').value, value: row.querySelector('.cf-value').value, secret: row.querySelector('.cf-sec').checked }));
+  if (formAvatars.has(form)) out.avatar = formAvatars.get(form);
+  return normalizeAccount(out);
+}
 function openAccountForm(id, opts) {
   if (!S.unlocked) return;
   opts = opts || {};
   const existing = id ? findAccount(id) : null;
   if (id && !existing) return;
   const isNew = !existing;
-  const base = JSON.parse(JSON.stringify(existing || opts.template || blankAccount()));
+  // Rascunho restaurado (opts.draft): o formulário mostra o rascunho, mas compara e salva sobre a conta atual (orig)
+  const orig = JSON.parse(JSON.stringify(existing || opts.template || blankAccount()));
+  const base = opts.draft ? normalizeAccount(JSON.parse(JSON.stringify(opts.draft))) : orig;
+  const gen0 = S.gen; // sessão em que o formulário abriu
   if (isNew && !base.games.length) base.games.push(blankGame());
   refreshGameDatalist();
   let saved = false;
   const d = openDialog({
     className: 'dlg-lg sheet', dismissable: false,
     content: accountFormHTML(base, isNew),
-    onClose: () => { if (opts.fromDetail && S.unlocked && findAccount(id)) openDetail(id); if (saved && opts.onSaved) opts.onSaved(); }
+    onClose: () => { if (opts.fromDetail && S.unlocked && S.gen === gen0 && findAccount(id)) openDetail(id); if (saved && opts.onSaved) opts.onSaved(); }
   });
   const form = d.el.querySelector('form');
   const el = n => form.elements.namedItem(n);
@@ -3982,7 +4390,7 @@ function openAccountForm(id, opts) {
     if (f) row.querySelector('.cf-value').value = f.value;
   }
   wireAvatarField(form, base);
-  let platformTouched = !isNew || !!opts.platformFixed;
+  let platformTouched = !isNew || !!opts.platformFixed || !!opts.draft;
   const strengthEl = form.querySelector('[data-strength]');
   const ctx = () => [el('login').value, el('email').value.split('@')[0], el('label').value, el('accountId').value];
   const paint = () => paintStrength(strengthEl, el('password').value, ctx());
@@ -4049,7 +4457,13 @@ function openAccountForm(id, opts) {
       pwInput.select();
     }
   });
-  const initial = serializeForm(form);
+  const initial = opts.draft ? null : serializeForm(form); // rascunho restaurado já começa com alterações
+  // Bloqueio com o formulário alterado: lock() guarda o que está na tela como rascunho (ver saveDraftOnLock)
+  draftGetters.set(d.el, () => {
+    if (saved || d.closing || d.closed || serializeForm(form) === initial) return null; // salvo ou descartado
+    const r = readAccountForm(form, orig, isNew);
+    return { accountId: isNew ? null : id, isNew, account: r.account || rawAccountForm(form, orig), at: nowISO() };
+  });
   d.beforeClose = async () => {
     if (serializeForm(form) === initial) return true;
     return confirmDialog({ title: 'Descartar alterações?', message: 'Você fez alterações nesta conta que ainda não foram salvas.', confirmText: 'Descartar', cancelText: 'Continuar editando', danger: true });
@@ -4060,7 +4474,7 @@ function openAccountForm(id, opts) {
     if (!S.unlocked) return;
     errEl.textContent = '';
     if (!isNew && serializeForm(form) === initial) { d.beforeClose = null; d.close(); return; }
-    const r = readAccountForm(form, base, isNew);
+    const r = readAccountForm(form, orig, isNew);
     if (r.error) {
       errEl.textContent = r.error;
       if (r.focus) {
@@ -4073,6 +4487,7 @@ function openAccountForm(id, opts) {
     commit(v => {
       const i = v.accounts.findIndex(x => x.id === r.account.id);
       if (i >= 0) v.accounts[i] = r.account; else v.accounts.unshift(r.account);
+      if (v.draft && v.draft.account.id === r.account.id) v.draft = null; // rascunho desta conta ficou velho
     });
     d.beforeClose = null;
     d.close();
@@ -4117,22 +4532,27 @@ function autosaveSectionHTML() {
 }
 function extraSectionHTML() {
   const dir = Desk.info && Desk.info.extraDir;
+  const file = Desk.info && Desk.info.extraFile;
   const ex = Desk.extra;
   if (!dir || ex.state === 'off') {
     return html`<p class="muted small">Grava também uma cópia <strong>criptografada</strong> em outra pasta a cada alteração. O ideal é uma pasta sincronizada com a nuvem (Google Drive, OneDrive, Dropbox) ou um pendrive.</p>
       <div class="btn-row"><button type="button" class="btn sm primary" data-act="extra-choose">${icon('file', 'sm')}Escolher pasta…</button></div>`;
   }
+  if (ex.state === 'error' && ex.code === 'other-vault') {
+    return html`<p class="small"><span class="chip danger">${icon('alert')}Pausada</span> Outro cofre está usando esta pasta (<strong>${dir}</strong>). Nada foi gravado lá para não apagar a cópia dele.</p>
+      <div class="btn-row"><button type="button" class="btn sm primary" data-act="extra-resolve">Resolver…</button><button type="button" class="btn sm" data-act="extra-choose">Trocar pasta</button><button type="button" class="btn sm ghost danger-text" data-act="extra-clear">Desativar</button></div>`;
+  }
   if (ex.state === 'error') {
     return html`<p class="small"><span class="chip danger">${icon('alert')}Erro</span> Não foi possível gravar em <strong>${dir}</strong>: ${ex.error}</p>
       <div class="btn-row"><button type="button" class="btn sm primary" data-act="extra-retry">Tentar de novo</button><button type="button" class="btn sm" data-act="extra-choose">Trocar pasta</button><button type="button" class="btn sm ghost danger-text" data-act="extra-clear">Desativar</button></div>`;
   }
-  return html`<p class="small"><span class="chip success">${icon('check')}Ativa</span> Gravando em <strong>${dir}</strong>${ex.at ? ' · última gravação ' + relTime(ex.at) : ''}.</p>
+  return html`<p class="small"><span class="chip success">${icon('check')}Ativa</span> Gravando em <strong>${dir}</strong>${file && file !== 'harmful-backup.json' ? ' como ' + file : ''}${ex.at ? ' · última gravação ' + relTime(ex.at) : ''}.</p>
     <div class="btn-row"><button type="button" class="btn sm" data-act="open-folder" data-folder="extra">Abrir pasta</button><button type="button" class="btn sm" data-act="extra-choose">Trocar pasta</button><button type="button" class="btn sm ghost danger-text" data-act="extra-clear">Desativar</button></div>`;
 }
 function deskBackupHTML() {
   const info = Desk.info || {};
   return html`<div class="subbox"><h4>Cópias automáticas</h4>
-      <p class="muted small">A cada alteração o app guarda cópias criptografadas do cofre neste PC (as ${info.snapshotKeep || 30} mais recentes, no máximo uma a cada 30 minutos). ${info.snapshotCount != null ? plural(info.snapshotCount, 'cópia salva', 'cópias salvas') + ' até agora.' : ''}</p>
+      <p class="muted small">A cada alteração o app guarda cópias criptografadas do cofre neste PC (as ${info.snapshotKeep || 30} mais recentes, no máximo uma a cada 30 minutos). Antes de restaurar, importar ou trocar a senha, guarda mais uma, que fica por 90 dias. ${info.snapshotCount != null ? plural(info.snapshotCount, 'cópia salva', 'cópias salvas') + ' até agora.' : ''}</p>
       <div class="btn-row"><button type="button" class="btn sm" data-act="open-folder" data-folder="snapshots">Abrir pasta das cópias</button><button type="button" class="btn sm" data-act="open-folder" data-folder="data">Abrir pasta dos dados</button></div></div>
     <div class="subbox"><h4>Cópia extra em outra pasta</h4><div class="stack" style="gap:10px">${extraSectionHTML()}</div></div>`;
 }
@@ -4152,7 +4572,7 @@ function settingsHTML() {
     </section>
     <section class="dsec"><h3>Segurança</h3>
       <div class="grid-2">
-        <label class="field"><span>Bloquear automaticamente após</span><select id="set-autolock">${AUTOLOCK_OPTIONS.map(m => html`<option value="${m}" ${sel(st.autoLockMin === m)}>${lockLabel(m)}${m ? ' sem uso' : ''}</option>`)}</select></label>
+        <label class="field"><span>Bloquear automaticamente após</span><select id="set-autolock"${SYS_IDLE ? raw(' title="Conta o tempo sem usar o computador (teclado e mouse em qualquer programa)"') : ''}>${AUTOLOCK_OPTIONS.map(m => html`<option value="${m}" ${sel(st.autoLockMin === m)}>${lockLabel(m)}${m ? (SYS_IDLE ? ' sem usar o PC' : ' sem uso') : ''}</option>`)}</select></label>
         <label class="field"><span>Apagar senha copiada após</span><select id="set-clip">${CLIP_OPTIONS.map(s => html`<option value="${s}" ${sel(st.clipboardClearSec === s)}>${clipLabel(s)}</option>`)}</select></label>
       </div>
       ${DESKTOP ? html`<div class="stack" style="gap:10px;margin-bottom:6px"><h3 style="margin:6px 0 0">Skins e perfis</h3>
@@ -4180,7 +4600,7 @@ function settingsHTML() {
     </section>
     ${DESKTOP ? html`<section class="dsec"><h3>Atualizações</h3><div id="upd-sec" class="stack" style="gap:8px"><p class="small faint">Verificando…</p></div></section>` : ''}
     <section class="dsec danger-zone"><h3>Zona de perigo</h3><p class="muted small">Apaga todas as contas salvas ${DESKTOP ? 'neste computador' : 'neste navegador'}. Backups que você salvou não são afetados.</p><button type="button" class="btn danger" data-act="delete-vault">${icon('trash', 'sm')}Apagar cofre</button></section>
-    <p class="small faint">Harmful ${(Desk.info && Desk.info.version) || APP_VERSION} · AES-256-GCM com chave derivada por PBKDF2-SHA-256 (${fmtInt(S.iterations)} iterações). Os dados do cofre nunca saem deste computador. O app só se conecta para buscar skins/capas (Mojang/OptiFine), perfis públicos da Steam e verificar atualizações (GitHub).</p>
+    <p class="small faint">Harmful ${(Desk.info && Desk.info.version) || APP_VERSION} · AES-256-GCM com chave derivada por PBKDF2-SHA-256 (${fmtInt(S.iterations)} iterações). Os dados do cofre nunca saem deste computador. O app só se conecta para buscar skins/capas (Mojang/OptiFine), perfis públicos da Steam, dados do Valorant (Riot Client e valorant-api.com, só quando você pede) e verificar atualizações (GitHub).</p>
   </div>`;
 }
 function openSettings() {
@@ -4268,9 +4688,10 @@ function openSettings() {
       const prevCred = { key: S.key, salt: S.salt, iterations: S.iterations };
       S.key = key; S.salt = salt; S.iterations = KDF_ITERATIONS;
       try {
-        await persist();
+        await persist({ snapshot: 'antes-senha' });
       } catch (saveErr) {
-        if (S.key === key) { S.key = prevCred.key; S.salt = prevCred.salt; S.iterations = prevCred.iterations; }
+        // a troca foi desfeita: o cofre no disco não mudou, então a cópia pedida não precisa mais ir
+        if (S.key === key) { S.key = prevCred.key; S.salt = prevCred.salt; S.iterations = prevCred.iterations; if (pendingSnapshots.get(S.gen) === 'antes-senha') pendingSnapshots.delete(S.gen); }
         throw saveErr;
       }
       cur.value = ''; n1.value = ''; n2.value = '';
@@ -4388,7 +4809,8 @@ async function importBackupFlow(opts) {
       if (!ok) return;
     }
     startSession({ key: opened.key, salt: opened.salt, iterations: opened.iterations, vault: data, rev: 0 });
-    await persist().catch(() => {});
+    // se não gravou (ex.: a cópia do cofre atual falhou), o erro já apareceu: sem aviso de "restaurado"
+    if (!(await persist({ snapshot: 'antes-restaurar' }).then(() => true, () => false))) return;
     toast('Backup restaurado: ' + plural(n, 'conta', 'contas') + '. A senha mestra é a do backup.');
     return;
   }
@@ -4403,12 +4825,12 @@ async function importBackupFlow(opts) {
   if (!choice || !S.unlocked) return;
   if (choice === 'merge') {
     const r = mergeAccounts(S.vault.accounts, data.accounts);
-    commit(v => { v.accounts = r.accounts; });
+    commit(v => { v.accounts = r.accounts; }, { snapshot: 'antes-importar' });
     toast('Importação concluída: ' + plural(r.added, 'conta adicionada', 'contas adicionadas') + ', ' + plural(r.updated, 'atualizada', 'atualizadas') + '.');
   } else {
     const ok = await confirmDialog({ title: 'Substituir todas as contas?', message: 'As ' + plural(S.vault.accounts.length, 'conta atual', 'contas atuais') + ' serão trocadas pelas ' + plural(n, 'conta', 'contas') + ' do backup.', confirmText: 'Substituir', danger: true });
     if (!ok || !S.unlocked) return;
-    commit(v => { v.accounts = data.accounts; });
+    commit(v => { v.accounts = data.accounts; }, { snapshot: 'antes-importar' });
     toast('Cofre substituído pelo backup (' + plural(n, 'conta', 'contas') + ').');
   }
 }
@@ -4515,6 +4937,10 @@ document.addEventListener('click', async e => {
       copy.label = (a.label || accTitle(a)) + ' (cópia)';
       copy.games = copy.games.map(g => Object.assign(g, { id: uid() }));
       copy.customFields = copy.customFields.map(f => Object.assign(f, { id: uid() }));
+      // Leitura do Valorant e avatar ligado a um perfil (skin do Minecraft por uuid, perfil da Steam) são da conta
+      // original: a cópia começa sem eles (imagem comum continua)
+      copy.valorant = null;
+      if (copy.avatar && (copy.avatar.type === 'steam' || (copy.avatar.type === 'mcskin' && copy.avatar.uuid))) copy.avatar = null;
       const dlg = el.closest('dialog');
       if (dlg) dlg.close();
       openAccountForm(null, { template: copy, platformFixed: true });
@@ -4603,6 +5029,7 @@ document.addEventListener('click', async e => {
       if (nb) nb.focus({ preventScroll: true });
       break;
     }
+    case 'val-refresh': valorantRefresh(id); break;
     case 'toggle-more-games': {
       ui.moreGames = !ui.moreGames;
       renderSidebar();
@@ -4639,14 +5066,14 @@ document.addEventListener('click', async e => {
       updateBackupIndicators();
       break;
     case 'autosave-unlink': await Autosave.unlink(); toast('Backup automático desativado'); break;
-    case 'extra-choose': {
+    case 'extra-choose': case 'extra-resolve': {
       if (!DESKTOP) return;
       try {
-        const r = await window.desktop.chooseExtraFolder();
+        const r = await window.desktop.chooseExtraFolder({ current: act === 'extra-resolve' });
         await Desk.refresh();
         if (r && !r.canceled) {
           if (Desk.extra.state === 'error') toast('Não foi possível gravar nessa pasta: ' + Desk.extra.error, 'error');
-          else toast('Cópia extra ativada');
+          else toast(r.extraFile && r.extraFile !== 'harmful-backup.json' ? 'Cópia extra gravada como ' + r.extraFile : 'Cópia extra ativada');
         }
       } catch (ex) { toast(errMsg(ex), 'error'); }
       updateBackupIndicators();
@@ -4670,6 +5097,67 @@ document.addEventListener('click', async e => {
     }
   }
 });
+// Aplica o termo da busca. O campo espera 90 ms de pausa na digitação; Enter e ↓ aplicam na hora.
+function applySearch() {
+  const s = $('#search');
+  if (!S.unlocked || !s) return;
+  if (s.value === ui.search && ui.view === 'accounts') return; // já aplicado (ex.: Enter antes da pausa)
+  ui.search = s.value;
+  ui.animate = ui.view !== 'accounts' ? 'full' : 'flip';
+  if (ui.view !== 'accounts') ui.view = 'accounts';
+  renderSidebar();
+  renderMain();
+}
+// Copia a senha ou o login (ou e-mail) pelo teclado. O aviso diz de qual conta é, porque o alvo pode não estar à vista.
+async function copyAccountField(id, which) {
+  const a = findAccount(id);
+  if (!a) return;
+  const field = which === 'password' ? 'password' : loginField(a);
+  const value = field ? getField(id, field, '') : '';
+  if (!value) { toast('“' + idTitle(a) + '” não tem ' + (which === 'password' ? 'senha salva' : 'login nem e-mail salvo'), 'error'); return; }
+  const meta = fieldMeta(id, field, '');
+  if (await copyText(value, meta[0] + ' de ' + idTitle(a), meta[1])) flashCopied($('#main .card[data-key="' + CSS.escape(id) + '"] [data-act="copy"][data-field="' + field + '"]'));
+}
+// Teclado da lista. Na busca: Enter abre a 1ª conta, Ctrl+Enter copia a senha dela, Shift+Enter o login (ou e-mail)
+// e ↓ desce para a lista. Numa conta: setas andam entre as contas (↑ na 1ª volta para a busca) e Ctrl/Shift+Enter
+// copiam dela. Devolve true quando tratou a tecla.
+function listKeydown(e, t) {
+  if (e.altKey || e.isComposing || !t || !t.closest) return false;
+  const mod = e.ctrlKey || e.metaKey;
+  const arrow = !mod && !e.shiftKey && /^Arrow(Up|Down|Left|Right)$/.test(e.key);
+  if (e.key !== 'Enter' && !arrow) return false;
+  const inSearch = t.id === 'search';
+  const card = inSearch ? null : t.closest('#main .card[data-key]');
+  if (!card && !(inSearch && (e.key === 'Enter' || e.key === 'ArrowDown'))) return false;
+  // Enter segurado: a repetição não reabre o painel (que fecharia e abriria sem parar) nem copia de novo
+  if (e.key === 'Enter' && e.repeat && (inSearch || mod || e.shiftKey)) { e.preventDefault(); return true; }
+  if (inSearch && t.value !== ui.search) applySearch(); // vale o que está digitado, sem esperar a pausa
+  if (ui.view !== 'accounts') return false;
+  const cards = $$('#main .card[data-key]');
+  const go = c => { const b = c && c.querySelector('.card-open'); if (b) { e.preventDefault(); b.focus(); } return !!b; };
+  if (arrow) {
+    if (inSearch) return go(cards[0]);
+    e.preventDefault();
+    const i = cards.indexOf(card);
+    const cols = cards.filter(c => c.offsetTop === cards[0].offsetTop).length || 1; // na grade, ↑/↓ pulam uma linha
+    if (e.key === 'ArrowUp' && i - cols < 0) { const s = $('#search'); if (s) s.focus(); return true; }
+    const step = { ArrowDown: cols, ArrowUp: -cols, ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    const last = cards[cards.length - 1];
+    go(cards[i + step] || (e.key === 'ArrowDown' && last.offsetTop > card.offsetTop ? last : null));
+    return true;
+  }
+  const target = card || cards[0];
+  if (mod || e.shiftKey) {
+    e.preventDefault();
+    if (target) copyAccountField(target.dataset.key, mod ? 'password' : 'login');
+    else toast('Nenhuma conta encontrada', 'error');
+    return true;
+  }
+  if (card || !target) return false; // Enter numa conta: o próprio botão focado resolve
+  e.preventDefault();
+  openDetail(target.dataset.key);
+  return true;
+}
 document.addEventListener('keydown', e => {
   if (e.altKey && !e.ctrlKey && !e.metaKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && S.unlocked && ui.view === 'accounts' && !$('dialog[open]')) {
     const card = document.activeElement && document.activeElement.closest && document.activeElement.closest('#main .card[data-key]');
@@ -4696,6 +5184,7 @@ document.addEventListener('keydown', e => {
   if (!S.unlocked || $('dialog[open]')) return;
   const t = e.target;
   const typing = t && t.closest && t.closest('input, textarea, select, [contenteditable]');
+  if (listKeydown(e, t)) return;
   if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k')) {
     e.preventDefault();
     const s = $('#search');

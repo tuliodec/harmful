@@ -1,7 +1,7 @@
 {
   "name": "harmful",
   "productName": "Harmful",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Harmful: suas contas de jogos organizadas e protegidas — logins, senhas, nicks, ranks e skins.",
   "main": "src/main.js",
   "author": "Harmful",

@@ -4,7 +4,7 @@
 // e oferece diálogos nativos para backup/importação. A criptografia acontece na janela (renderer):
 // este processo só recebe e grava o texto já criptografado.
 // Exceções à regra "nada vai para a internet": a skin do Minecraft e o perfil público da Steam, buscados
-// aqui (não na janela). Veja "Minecraft" e "Steam" abaixo.
+// aqui (não na janela), e o Valorant pelo Riot Client (só quando a pessoa clica). Veja "Minecraft", "Steam" e "Valorant" abaixo.
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, powerMonitor, session, screen, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -88,6 +88,17 @@ function isEnvelopeText(text) {
 async function exists(file) {
   try { await fsp.access(file); return true; } catch { return false; }
 }
+// Cópias automáticas: "cofre-<data>.json" no máximo a cada 30 min (ficam as SNAPSHOT_KEEP mais novas) e as
+// especiais, "cofre-apagado-…" e "cofre-antes-…", tiradas antes de trocar o cofre inteiro: fora da contagem, por 90 dias.
+const SNAPSHOT_SPECIAL_MS = 90 * 864e5;
+const SNAPSHOT_FORCED = ['antes-restaurar', 'antes-importar', 'antes-senha']; // as que a janela pode pedir
+const SNAPSHOT_RE = /^cofre-(?:(.+)-)?(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.json$/i;
+// Data pelo nome, não pelo mtime: no Windows o copyFile mantém o mtime do cofre de origem.
+function snapshotInfo(name) {
+  const m = SNAPSHOT_RE.exec(name);
+  if (!m) return null;
+  return { special: !!m[1], at: new Date(+m[2], m[3] - 1, +m[4], +m[5], +m[6], +m[7]).getTime() };
+}
 async function listSnapshots() {
   let names = [];
   try { names = await fsp.readdir(paths.snapshots); } catch { return []; }
@@ -97,7 +108,11 @@ async function listSnapshots() {
 }
 async function pruneSnapshots() {
   const names = await listSnapshots();
-  for (const n of names.slice(SNAPSHOT_KEEP)) await fsp.rm(path.join(paths.snapshots, n), { force: true }).catch(() => {});
+  const info = n => snapshotInfo(n) || { special: null }; // sem data no nome: não foi o app que gravou, fica
+  const old = Date.now() - SNAPSHOT_SPECIAL_MS;
+  const drop = names.filter(n => info(n).special === false).slice(SNAPSHOT_KEEP)
+    .concat(names.filter(n => info(n).special && info(n).at < old));
+  for (const n of drop) await fsp.rm(path.join(paths.snapshots, n), { force: true }).catch(() => {});
 }
 async function snapshot(prefix) {
   if (!(await exists(paths.vault))) return;
@@ -108,18 +123,84 @@ async function snapshot(prefix) {
 }
 async function initSnapshotClock() {
   const names = await listSnapshots();
-  if (!names.length) return;
-  try { lastSnapshotAt = (await fsp.stat(path.join(paths.snapshots, names[0]))).mtimeMs; } catch { /* ignora */ }
+  const last = names.length ? snapshotInfo(names[0]) : null;
+  if (last) lastSnapshotAt = Math.min(last.at, Date.now());
 }
-async function writeExtra(text) {
+// Sal do KDF de um envelope: identifica o cofre (só muda quando a senha mestra muda)
+function envelopeSalt(text) {
+  if (!isEnvelopeText(text)) return null;
+  const s = JSON.parse(text).kdf.salt;
+  return typeof s === 'string' && s ? s : null;
+}
+function extraFileName() {
+  const f = config.extraFile;
+  return typeof f === 'string' && /^harmful-backup-[a-z0-9-]{1,40}\.json$/i.test(f) ? f : EXTRA_FILE;
+}
+// No Windows "D:\Backup" e "d:\backup" são a mesma pasta
+function samePath(a, b) {
+  const n = p => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  return n(a) === n(b);
+}
+// De quem é o arquivo que já está na pasta extra: null (não existe), 'own', 'unknown' (não é um cofre)
+// ou 'other' (cofre de outro PC ou de outra instalação: nunca é sobrescrito sem perguntar).
+async function extraOwner(file, own) {
+  let text;
+  try {
+    if ((await fsp.stat(file)).size > MAX_BYTES) return 'unknown';
+    text = await fsp.readFile(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return null;
+    throw e;
+  }
+  const salt = envelopeSalt(text);
+  return !salt ? 'unknown' : own.includes(salt) ? 'own' : 'other';
+}
+// "Manter os dois": o primeiro harmful-backup-N.json livre (ou que já seja deste cofre)
+async function freeExtraName(dir, own) {
+  for (let i = 2; i < 100; i++) {
+    const name = 'harmful-backup-' + i + '.json';
+    const who = await extraOwner(path.join(dir, name), own).catch(() => 'other');
+    if (who === null || who === 'own') return name;
+  }
+  return 'harmful-backup-' + crypto.randomBytes(4).toString('hex') + '.json';
+}
+// Somente em desenvolvimento: resposta automática ao aviso abaixo (substituir | manter | cancelar).
+const E2E_ANSWER = !app.isPackaged ? String(process.env.COFRE_GAMER_E2E_ANSWER || '') : '';
+async function askOtherVault(file, alt) {
+  const answers = ['substituir', 'manter', 'cancelar'];
+  if (E2E_DIR || E2E_ANSWER) return answers.includes(E2E_ANSWER) ? E2E_ANSWER : 'cancelar';
+  const r = await dialog.showMessageBox(win, {
+    type: 'warning',
+    title: 'Cópia extra',
+    message: 'Esta pasta já tem a cópia de outro cofre',
+    detail: 'O arquivo ' + file + ' é de outro cofre (de outro PC ou de uma instalação anterior). Substituir apaga essa cópia.\n\nManter os dois grava a deste cofre como ' + alt + '.',
+    buttons: ['Substituir', 'Manter os dois', 'Cancelar'],
+    defaultId: 1,
+    cancelId: 2,
+    noLink: true
+  });
+  return answers[r.response] || 'cancelar';
+}
+// opts.force: o usuário mandou substituir a cópia de outro cofre; opts.prevSalt: sal do cofre antes desta gravação
+async function writeExtra(text, opts) {
+  opts = opts || {};
   const dir = config.extraBackupDir;
   if (!dir) {
     extraStatus = { state: 'off', error: '', at: null };
     return extraStatus;
   }
   try {
-    await atomicWrite(path.join(dir, EXTRA_FILE), text);
+    const file = path.join(dir, extraFileName());
+    const salt = envelopeSalt(text);
+    // outro PC ou outra instalação apontando para a mesma pasta (OneDrive etc.): para aqui em vez de apagar a cópia dele
+    if (!opts.force && await extraOwner(file, [salt, config.extraSalt, opts.prevSalt]) === 'other') {
+      extraStatus = { state: 'error', code: 'other-vault', error: 'Outro cofre está usando esta pasta', at: extraStatus.at };
+      return extraStatus;
+    }
+    await atomicWrite(file, text);
     extraStatus = { state: 'ok', error: '', at: new Date().toISOString() };
+    // o sal muda com a senha mestra: guarda o último gravado para reconhecer a própria cópia na próxima vez
+    if (salt && salt !== config.extraSalt) { config.extraSalt = salt; await saveConfig(); }
   } catch (e) {
     extraStatus = { state: 'error', error: e.code === 'ENOENT' ? 'a pasta não foi encontrada (pendrive desconectado?)' : e.message, at: extraStatus.at };
   }
@@ -191,6 +272,8 @@ const MC_SKIN_HOST = 'textures.minecraft.net';
 // e a resposta só é aceita se for um PNG pequeno com as proporções de uma capa.
 const OF_CAPE_URL = 'http://s.optifine.net/capes/';
 const MC_MAX_CAPE = 256 * 1024;
+// Somente em desenvolvimento: os testes automáticos trocam os servidores por um servidor local (http://127.0.0.1:porta).
+const MC_MOCK = !app.isPackaged && /^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(process.env.COFRE_GAMER_MC_MOCK || '') ? process.env.COFRE_GAMER_MC_MOCK : null;
 const MC_MSG = {
   invalid_name: 'Nick inválido: use 3 a 16 letras, números ou _.',
   not_found: 'Nenhuma conta do Minecraft com esse nick.',
@@ -208,7 +291,7 @@ const mcFail = (code, message) => { throw new McError(code, message); };
 
 function mcGet(url) {
   // Pilha de rede do Chromium (respeita o proxy do sistema), sem cookies e sem seguir redirecionamentos.
-  return net.fetch(url, {
+  return net.fetch(MC_MOCK ? MC_MOCK + '/' + url.replace(/^https?:\/\//, '') : url, {
     method: 'GET',
     headers: { Accept: url.startsWith('https://' + MC_SKIN_HOST) ? 'image/png' : 'application/json' },
     credentials: 'omit',
@@ -280,11 +363,19 @@ async function mcSkinInfo(uuid) {
   const j = await mcJson(res, 'network');
   const name = String((j && j.name) || '');
   const prop = j && Array.isArray(j.properties) ? j.properties.find(p => p && p.name === 'textures') : null;
-  if (!prop || typeof prop.value !== 'string') mcFail('bad_skin', MC_MSG.default_skin);
+  // Sem textura de skin = skin padrão do jogo. O nick vai junto: a atualização automática corrige o nick e
+  // registra a consulta (sem isso perguntaria de novo a cada abertura).
+  const noSkin = () => {
+    const e = new McError('bad_skin', MC_MSG.default_skin);
+    e.defaultSkin = true;
+    e.nick = /^[A-Za-z0-9_]{1,16}$/.test(name) ? name : '';
+    throw e;
+  };
+  if (!prop || typeof prop.value !== 'string') noSkin();
   let tex;
   try { tex = JSON.parse(Buffer.from(prop.value, 'base64').toString('utf8')); } catch { mcFail('bad_skin'); }
   const skin = tex && tex.textures && tex.textures.SKIN;
-  if (!skin || typeof skin.url !== 'string' || !skin.url) mcFail('bad_skin', MC_MSG.default_skin);
+  if (!skin || typeof skin.url !== 'string' || !skin.url) noSkin();
   const url = mcTextureUrl(skin.url);
   if (!url) mcFail('bad_skin');
   const cape = tex.textures.CAPE;
@@ -315,17 +406,23 @@ function capeCheckPng(buf) {
   }
   return false;
 }
+// Devolve a capa (data URL) ou null quando o servidor responde que não há capa (404, ou imagem que não é capa).
+// Lança quando não deu para saber (tempo esgotado, sem rede, 5xx, resposta que nem é PNG): quem chama mantém a
+// capa que já tinha, em vez de apagar a capa e a escolha da pessoa por causa de uma falha passageira.
 async function mcDownloadCape(url) {
-  try {
-    const res = await mcGet(url);
-    if (!res.ok) { mcDiscard(res); return null; }
-    const buf = await mcReadCapped(res, MC_MAX_CAPE, 'bad_skin');
-    if (!capeCheckPng(buf)) return null;
-    const src = 'data:image/png;base64,' + buf.toString('base64');
-    return src.length <= MC_MAX_DATA_URL ? src : null;
-  } catch {
-    return null; // capa é opcional: qualquer falha só significa "sem capa"
+  const res = await mcGet(url);
+  if (res.status === 404) { mcDiscard(res); return null; }
+  if (!res.ok) { mcDiscard(res); mcFail('network'); }
+  let buf;
+  try { buf = await mcReadCapped(res, MC_MAX_CAPE, 'bad_skin'); } catch (e) {
+    // imagem grande demais não é capa; página grande (proxy/Wi-Fi) ou conexão caída no meio = não deu para saber
+    if (e instanceof McError && /^image\//i.test(res.headers.get('content-type') || '')) return null;
+    throw e;
   }
+  if (!pngSize(buf)) mcFail('network'); // página de proxy/Wi-Fi no lugar da imagem
+  if (!capeCheckPng(buf)) return null;
+  const src = 'data:image/png;base64,' + buf.toString('base64');
+  return src.length <= MC_MAX_DATA_URL ? src : null;
 }
 async function mcDownloadSkin(url) {
   const res = await mcGet(url);
@@ -343,14 +440,20 @@ async function mcLookup(nick, uuid, opts) {
     const profile = uuid ? { uuid, name: '' } : await mcProfileByName(nick);
     const info = await mcSkinInfo(profile.uuid);
     const name = info.name || profile.name || nick || '';
-    const [src, mojangCape, optifineCape] = await Promise.all([
+    // capeErrors[lado] = true: não deu para saber se tem capa (a janela mantém a que já estava guardada)
+    const cape = url => url ? mcDownloadCape(url).then(c => ({ src: c, error: false }), () => ({ src: null, error: true })) : { src: null, error: false };
+    const [src, mojang, optifine] = await Promise.all([
       mcDownloadSkin(info.url),
-      info.capeUrl ? mcDownloadCape(info.capeUrl) : Promise.resolve(null),
-      opts.optifine && MC_NICK_RE.test(name) ? mcDownloadCape(OF_CAPE_URL + encodeURIComponent(name) + '.png') : Promise.resolve(null)
+      cape(info.capeUrl),
+      cape(opts.optifine && MC_NICK_RE.test(name) ? OF_CAPE_URL + encodeURIComponent(name) + '.png' : null)
     ]);
-    return { ok: true, name, uuid: profile.uuid, model: info.model, src, capes: { mojang: mojangCape, optifine: optifineCape } };
+    return {
+      ok: true, name, uuid: profile.uuid, model: info.model, src,
+      capes: { mojang: mojang.src, optifine: optifine.src }, capeErrors: { mojang: mojang.error, optifine: optifine.error }
+    };
   } catch (e) {
     // Falhas esperadas nunca atravessam o IPC como exceção; tempo esgotado e erro de rede viram 'network'.
+    if (e instanceof McError && e.defaultSkin) return { ok: false, error: e.code, message: e.message, defaultSkin: true, name: e.nick };
     if (e instanceof McError) return { ok: false, error: e.code, message: e.message };
     return { ok: false, error: 'network', message: MC_MSG.network };
   }
@@ -527,6 +630,32 @@ function fetchSteamProfile(input) {
   return job;
 }
 
+/* ---------------- Valorant: rank, loja e skins pelo Riot Client ---------------- */
+// NÃO OFICIAL (a janela pede confirmação no primeiro uso) e só leitura, sempre por clique: lê a conta que está logada
+// no Riot Client deste PC. A senha da Riot nunca passa por aqui; o token vem do próprio cliente em 127.0.0.1 e só
+// existe durante a consulta. Endereços permitidos, limites e cache ficam em valorant.js (testável fora do Electron).
+const VAL_DEV = !app.isPackaged; // servidores falsos para os testes: só em desenvolvimento
+const valorantLib = require('./valorant');
+const valorant = valorantLib.create({
+  fetch: (url, opts) => net.fetch(url, Object.assign({ credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer' }, opts)),
+  lockfile: (VAL_DEV && process.env.COFRE_GAMER_RIOT_LOCKFILE) ||
+    path.join(process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local'), 'Riot Games', 'Riot Client', 'Config', 'lockfile'),
+  pdBase: (VAL_DEV && process.env.COFRE_GAMER_RIOT_PD) || null,
+  vapiBase: (VAL_DEV && process.env.COFRE_GAMER_VAPI) || null,
+  mediaBase: (VAL_DEV && process.env.COFRE_GAMER_VMEDIA) || null,
+  // Fora do cofre: nomes das skins (conteúdo público) e as imagens já vistas, que mostram as skins e lojas das contas;
+  // por isso elas saem do disco ao desvincular uma conta (valorant:prune) e ao apagar o cofre (vault:remove).
+  cacheDir: () => path.join(paths.data, 'valorant-cache'),
+  // as imagens chegam com ~500 px de largura; 320 px bastam para a janela e ocupam bem menos. Só decodifica PNG com
+  // largura e altura conferidas no cabeçalho (valorant.js já recusa as grandes demais; aqui, de novo, por garantia).
+  shrink: buf => {
+    if (!valorantLib.pngOk(buf)) throw new Error('PNG recusado');
+    const img = require('electron').nativeImage.createFromBuffer(buf);
+    if (img.isEmpty() || img.getSize().width <= 320) return buf;
+    return img.resize({ width: 320, quality: 'good' }).toPNG();
+  }
+});
+
 /* ---------------- Atualização automática (GitHub Releases) ---------------- */
 // Só no app instalado: confere ao abrir e a cada 6 h, baixa em segundo plano (o electron-updater confere o
 // SHA-512 do latest.yml) e instala ao reiniciar — ou sozinho quando o app fecha. A versão portátil não se atualiza.
@@ -581,16 +710,26 @@ function registerIpc() {
       throw e;
     }
   });
-  handle('vault:write', text => queue(async () => {
+  handle('vault:write', (text, opts) => queue(async () => {
     if (!isEnvelopeText(text)) throw new Error('Conteúdo inválido para o cofre');
-    if (Date.now() - lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) await snapshot('cofre').catch(e => console.error('snapshot', e));
+    const forced = opts && SNAPSHOT_FORCED.includes(opts.snapshot) ? opts.snapshot : null;
+    if (forced) {
+      // restaurar, importar ou trocar a senha: sem a cópia do cofre atual, não grava por cima dele
+      await snapshot('cofre-' + forced).catch(e => {
+        console.error('snapshot', e);
+        throw new Error('a cópia de segurança do cofre atual falhou' + (e && e.code ? ' (' + e.code + ')' : ''));
+      });
+    } else if (Date.now() - lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) await snapshot('cofre').catch(e => console.error('snapshot', e));
+    // cópia extra de antes da 1.0.8 (sem o sal guardado): o cofre ainda no disco tem o sal do arquivo que o app gravou lá
+    const prevSalt = config.extraBackupDir && !config.extraSalt ? envelopeSalt(await fsp.readFile(paths.vault, 'utf8').catch(() => null)) : null;
     await atomicWrite(paths.vault, text);
-    const extra = await writeExtra(text);
+    const extra = await writeExtra(text, { prevSalt });
     return { ok: true, extra };
   }));
   handle('vault:remove', () => queue(async () => {
     await snapshot('cofre-apagado').catch(e => console.error('snapshot', e));
     await fsp.rm(paths.vault, { force: true });
+    await valorant.prune([]).catch(e => console.error('valorant', e)); // imagens do Valorant (skins e lojas vistas) saem junto com o cofre
     return { ok: true };
   }));
   handle('backup:save', async (text, name) => {
@@ -646,6 +785,7 @@ function registerIpc() {
     snapshotCount: (await listSnapshots()).length,
     snapshotKeep: SNAPSHOT_KEEP,
     extraDir: config.extraBackupDir || null,
+    extraFile: config.extraBackupDir ? extraFileName() : null,
     extra: extraStatus
   }));
   handle('update:status', async () => Object.assign({ current: app.getVersion(), enabled: !!updater }, updateState));
@@ -666,16 +806,33 @@ function registerIpc() {
     const err = await shell.openPath(dir);
     return !err;
   });
-  handle('extra:choose', async () => {
-    const dir = await askFolder({ title: 'Escolha a pasta para a cópia extra do cofre', properties: ['openDirectory', 'createDirectory'] });
+  handle('extra:choose', async opts => {
+    // "Resolver…" (outro cofre na pasta): a mesma pasta, sem abrir o seletor
+    const dir = opts && opts.current && config.extraBackupDir ? config.extraBackupDir : await askFolder(Object.assign(
+      { title: 'Escolha a pasta para a cópia extra do cofre', properties: ['openDirectory', 'createDirectory'] },
+      config.extraBackupDir ? { defaultPath: config.extraBackupDir } : {}));
     if (!dir) return { canceled: true, extra: extraStatus, extraDir: config.extraBackupDir || null };
-    if (path.resolve(dir) === path.resolve(paths.data)) throw new Error('Escolha uma pasta diferente da pasta do próprio app.');
-    config.extraBackupDir = dir;
-    await saveConfig();
+    if (samePath(dir, paths.data)) throw new Error('Escolha uma pasta diferente da pasta do próprio app.');
+    const same = !!config.extraBackupDir && samePath(config.extraBackupDir, dir);
+    let file = same ? extraFileName() : EXTRA_FILE;
+    let force = false;
     const text = await fsp.readFile(paths.vault, 'utf8').catch(() => null);
-    if (text) await queue(() => writeExtra(text));
+    const own = [envelopeSalt(text), same ? config.extraSalt : null];
+    if (text && await extraOwner(path.join(dir, file), own).catch(() => null) === 'other') {
+      const alt = await freeExtraName(dir, own);
+      const answer = await askOtherVault(file, alt);
+      if (answer === 'cancelar') return { canceled: true, extra: extraStatus, extraDir: config.extraBackupDir || null };
+      if (answer === 'manter') file = alt;
+      else force = true;
+    }
+    if (!same || file !== extraFileName()) delete config.extraSalt;
+    config.extraBackupDir = dir;
+    if (file === EXTRA_FILE) delete config.extraFile;
+    else config.extraFile = file;
+    await saveConfig();
+    if (text) await queue(async () => writeExtra(await fsp.readFile(paths.vault, 'utf8').catch(() => text), { force }));
     else extraStatus = { state: 'pending', error: '', at: null };
-    return { extra: extraStatus, extraDir: dir };
+    return { extra: extraStatus, extraDir: dir, extraFile: file };
   });
   handle('window:titlebar', async opts => {
     const hex = v => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : null);
@@ -693,13 +850,24 @@ function registerIpc() {
   });
   handle('extra:clear', async () => {
     delete config.extraBackupDir;
+    delete config.extraFile;
+    delete config.extraSalt;
     await saveConfig();
     extraStatus = { state: 'off', error: '', at: null };
     return { extra: extraStatus, extraDir: null };
   });
+  // Bloqueio automático: segundos sem usar o computador (teclado/mouse em qualquer programa, até jogo em tela cheia).
+  // Só nos testes (app não instalado), COFRE_GAMER_E2E_IDLE finge esse tempo.
+  handle('system:idle', () => {
+    const fake = app.isPackaged ? '' : process.env.COFRE_GAMER_E2E_IDLE;
+    return fake ? Math.max(0, Number(fake) || 0) : powerMonitor.getSystemIdleTime();
+  });
   handle('mc:skin', (nick, opts) => fetchMinecraftSkin(nick, opts));
   handle('mc:refresh', (uuid, opts) => refreshMinecraftProfile(uuid, opts));
   handle('steam:profile', ref => fetchSteamProfile(ref));
+  handle('valorant:snapshot', () => valorant.snapshot());
+  handle('valorant:images', (uuids, opts) => valorant.images(uuids, { net: !!(opts && opts.net) }));
+  handle('valorant:prune', keep => valorant.prune(keep));
 }
 
 /* ---------------- Janela ---------------- */
