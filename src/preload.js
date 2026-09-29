@@ -18,9 +18,10 @@ contextBridge.exposeInMainWorld('desktop', Object.freeze({
   openFolder: which => inv('folder:open', String(which)),
   chooseExtraFolder: () => inv('extra:choose'),
   clearExtraFolder: () => inv('extra:clear'),
-  // Única consulta à internet do app: só depois de um clique do usuário, pergunta à Mojang a skin deste nick.
+  // Consultas à internet: skin/capa do Minecraft (Mojang/OptiFine) e perfil público da Steam. Nada do cofre vai junto.
   fetchMinecraftSkin: (nick, opts) => inv('mc:skin', String(nick), { optifine: !(opts && opts.optifine === false) }),
   refreshMinecraftProfile: (uuid, opts) => inv('mc:refresh', String(uuid), { optifine: !(opts && opts.optifine === false) }),
+  fetchSteamProfile: ref => inv('steam:profile', String(ref)),
   updateStatus: () => inv('update:status'),
   checkUpdate: () => inv('update:check'),
   installUpdate: () => inv('update:install'),

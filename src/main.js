@@ -3,8 +3,8 @@
 // Guarda o cofre criptografado em %APPDATA%\Harmful\cofre.json, mantém cópias automáticas
 // e oferece diálogos nativos para backup/importação. A criptografia acontece na janela (renderer):
 // este processo só recebe e grava o texto já criptografado.
-// Única exceção à regra "nada vai para a internet": a busca da skin do Minecraft, feita aqui (não na
-// janela) e só quando o usuário clica para buscar. Veja "Minecraft" abaixo.
+// Exceções à regra "nada vai para a internet": a skin do Minecraft e o perfil público da Steam, buscados
+// aqui (não na janela). Veja "Minecraft" e "Steam" abaixo.
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, powerMonitor, session, screen, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -378,6 +378,155 @@ function refreshMinecraftProfile(uuid, o) {
   return job;
 }
 
+/* ---------------- Steam: perfil público ---------------- */
+// Foto, nome e situação (VAC, trade ban, conta limitada) do perfil público, pelo XML que o próprio
+// steamcommunity.com oferece (sem chave de API). Só o link/SteamID do perfil sai deste computador.
+const STEAM_BASE = 'https://steamcommunity.com/';
+const STEAM_ID64_BASE = 76561197960265728n;
+const STEAM_VANITY_RE = /^[A-Za-z0-9_-]{2,32}$/;
+const STEAM_AVATAR_HOST_RE = /^avatars(\.(akamai|fastly|cloudflare))?\.steamstatic\.com$/;
+const STEAM_MAX_XML = 64 * 1024;
+const STEAM_MAX_AVATAR = 256 * 1024;
+const STEAM_MSG = {
+  invalid: 'Cole o link do perfil da Steam (steamcommunity.com/id/… ou /profiles/…) ou o SteamID64.',
+  not_found: 'Nenhum perfil da Steam encontrado nesse link.',
+  network: 'Não foi possível falar com a Steam agora. Verifique a internet.',
+  rate_limited: 'A Steam pediu uma pausa nas consultas. Tente de novo em alguns minutos.',
+  bad: 'O perfil da Steam veio num formato que o app não aceita.'
+};
+const steamInFlight = new Map();
+
+// SteamID64 de conta individual: base + accountId de 32 bits (vai além de 7656119…, contas novas já chegam perto)
+function steamId64Ok(s) {
+  if (typeof s !== 'string' || !/^\d{17}$/.test(s)) return false;
+  const n = BigInt(s) - STEAM_ID64_BASE;
+  return n >= 1n && n < 4294967296n;
+}
+function steamFromAccountId(n) {
+  return n >= 1n && n < 4294967296n ? { kind: 'profiles', id: String(STEAM_ID64_BASE + n) } : null;
+}
+// Aceita: link /id/<nome> ou /profiles/<id64> (com ou sem subpágina), SteamID64, STEAM_0:X:Y e [U:1:N].
+function steamRef(input) {
+  const s = typeof input === 'string' && input.length <= 300 ? input.trim() : '';
+  if (!s) return null;
+  if (steamId64Ok(s)) return { kind: 'profiles', id: s };
+  let m = /^STEAM_[0-5]:([01]):(\d{1,10})$/i.exec(s);
+  if (m) return steamFromAccountId(BigInt(m[2]) * 2n + BigInt(m[1]));
+  m = /^\[U:1:(\d{1,10})\]$/i.exec(s);
+  if (m) return steamFromAccountId(BigInt(m[1]));
+  m = /^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/(profiles|id)\/([^/?#\s]+)(?:[/?#]\S*)?$/i.exec(s);
+  if (!m) return null;
+  const kind = m[1].toLowerCase();
+  let id;
+  try { id = decodeURIComponent(m[2]); } catch { return null; }
+  if (kind === 'profiles' ? !steamId64Ok(id) : !STEAM_VANITY_RE.test(id)) return null;
+  return { kind, id };
+}
+function steamGet(url, accept) {
+  return net.fetch(url, {
+    method: 'GET',
+    headers: { Accept: accept },
+    credentials: 'omit',
+    cache: 'no-store',
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
+    signal: AbortSignal.timeout(MC_TIMEOUT_MS)
+  });
+}
+function steamCheckStatus(res) {
+  if (res.status === 404) { mcDiscard(res); mcFail('not_found'); }
+  if (res.status === 429 || res.status === 503) { mcDiscard(res); mcFail('rate_limited'); }
+  if (!res.ok) { mcDiscard(res); mcFail('network'); }
+}
+// Os campos usados ficam nos primeiros ~2 KB; o resto (resumo, grupos, jogos) é ignorado, sem falhar se for grande.
+async function steamReadHead(res) {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+      total += value.byteLength;
+      if (total >= STEAM_MAX_XML || Buffer.concat(chunks, total).includes('</isLimitedAccount>')) break;
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks, total).subarray(0, STEAM_MAX_XML).toString('utf8');
+}
+// Leitor de tags que ignora o conteúdo de CDATA: o nome do perfil pode conter texto parecido com uma tag
+// (ex.: "<vacBanned>0</vacBanned>") e não pode falsificar os outros campos.
+function xmlReader(xml) {
+  const masked = xml.replace(/<!\[CDATA\[[\s\S]*?(?:\]\]>|$)/g, m => ' '.repeat(m.length));
+  const read = t => {
+    const m = new RegExp('<' + t + '>[^<]*</' + t + '>').exec(masked);
+    if (!m) return null;
+    const raw = xml.slice(m.index + t.length + 2, m.index + m[0].length - t.length - 3);
+    const c = /^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/.exec(raw);
+    return (c ? c[1] : raw).trim();
+  };
+  read.root = masked.replace(/^\s*(?:<\?xml[^>]*\?>\s*)?/, '');
+  return read;
+}
+// Só aceita o servidor de avatares da Steam; http vira https.
+function steamAvatarUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol) || !STEAM_AVATAR_HOST_RE.test(u.hostname) || u.port || u.username || u.password || !/^\/[A-Za-z0-9/_-]+\.(jpe?g|png)$/i.test(u.pathname)) return null;
+  u.protocol = 'https:';
+  u.search = '';
+  u.hash = '';
+  return u.href;
+}
+async function steamDownloadAvatar(url) {
+  const res = await steamGet(url, 'image/jpeg,image/png');
+  steamCheckStatus(res);
+  const buf = await mcReadCapped(res, STEAM_MAX_AVATAR, 'bad');
+  const type = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff ? 'jpeg' : pngSize(buf) ? 'png' : '';
+  if (!type) mcFail('bad');
+  const src = 'data:image/' + type + ';base64,' + buf.toString('base64');
+  if (src.length > MC_MAX_DATA_URL) mcFail('bad');
+  return src;
+}
+async function steamLookup(ref) {
+  try {
+    const res = await steamGet(STEAM_BASE + ref.kind + '/' + encodeURIComponent(ref.id) + '/?xml=1', 'text/xml,application/xml');
+    steamCheckStatus(res);
+    const tag = xmlReader(await steamReadHead(res));
+    if (/^<response>\s*<error>/i.test(tag.root)) mcFail('not_found');
+    if (!/^<profile>/i.test(tag.root)) mcFail('bad');
+    const id64 = tag('steamID64');
+    const vac = tag('vacBanned');
+    if (!steamId64Ok(id64) || vac == null || !/^\d+$/.test(vac)) mcFail('bad');
+    const avatarUrl = steamAvatarUrl(tag('avatarFull') || '') || steamAvatarUrl(tag('avatarMedium') || '');
+    if (!avatarUrl) mcFail('bad');
+    const src = await steamDownloadAvatar(avatarUrl);
+    const trade = (tag('tradeBanState') || '').toLowerCase();
+    return {
+      ok: true, id64, src,
+      name: (tag('steamID') || '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 64),
+      vac: Number(vac) > 0,
+      trade: !!trade && trade !== 'none',
+      limited: tag('isLimitedAccount') === '1'
+    };
+  } catch (e) {
+    const code = e instanceof McError && STEAM_MSG[e.code] ? e.code : 'network';
+    return { ok: false, error: code, message: STEAM_MSG[code] };
+  }
+}
+function fetchSteamProfile(input) {
+  const ref = steamRef(input);
+  if (!ref) return Promise.resolve({ ok: false, error: 'invalid', message: STEAM_MSG.invalid });
+  const key = ref.kind + ':' + ref.id.toLowerCase();
+  if (steamInFlight.has(key)) return steamInFlight.get(key);
+  const job = steamLookup(ref).finally(() => steamInFlight.delete(key));
+  steamInFlight.set(key, job);
+  return job;
+}
+
 /* ---------------- Atualização automática (GitHub Releases) ---------------- */
 // Só no app instalado: confere ao abrir e a cada 6 h, baixa em segundo plano (o electron-updater confere o
 // SHA-512 do latest.yml) e instala ao reiniciar — ou sozinho quando o app fecha. A versão portátil não se atualiza.
@@ -550,6 +699,7 @@ function registerIpc() {
   });
   handle('mc:skin', (nick, opts) => fetchMinecraftSkin(nick, opts));
   handle('mc:refresh', (uuid, opts) => refreshMinecraftProfile(uuid, opts));
+  handle('steam:profile', ref => fetchSteamProfile(ref));
 }
 
 /* ---------------- Janela ---------------- */
