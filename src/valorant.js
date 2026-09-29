@@ -3,7 +3,8 @@
 // Lê a conta que está logada no Riot Client deste PC: rank, nível, carteira, loja do dia, mercado noturno e skins.
 // - A senha da Riot nunca passa por aqui: o token vem do próprio Riot Client em 127.0.0.1 (porta e senha do lockfile)
 //   e só existe durante a consulta (variáveis locais; nada vai para disco nem para o log).
-// - Só endpoints da própria conta (store/mmr/account-xp no pd.*.a.pvp.net). Nada de partida, pré-jogo ou outros jogadores.
+// - Só endpoints da própria conta (store/mmr/account-xp/personalization no pd.*.a.pvp.net). Nada de partida, pré-jogo
+//   ou outros jogadores.
 // - Nomes, ranks e imagens das skins vêm do valorant-api.com (site da comunidade, não da Riot), com cache em disco.
 //   Os nomes são conteúdo público; já as imagens guardadas mostram as skins e as lojas que a conta viu: só vão à
 //   internet quando a janela pede (conta atualizada pelo botão) e saem do disco ao desvincular ou apagar o cofre.
@@ -47,6 +48,7 @@ const CUR = { vp: '85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741', rad: 'e59aa87c-4cbf-51
 const PLATFORM = 'ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ICON_RE = /^\/(weaponskins|weaponskinlevels|weaponskinchromas)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(displayicon|fullrender)\.png$/;
+const CARD_MAX = 340 * 1024; // o card vira a foto da conta (data: URL no cofre; a janela aceita até 350 KB)
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MSG = {
   no_client: 'Abra o Riot Client e entre na conta.',
@@ -111,8 +113,20 @@ function parseRank(j, content) {
   const names = (content && content.tiers) || {};
   return { tier, name: names[tier] || '', rr: tier ? rr : null }; // sem a tabela de nomes: fica só o número
 }
-// Skins que a conta tem: a Riot lista os NÍVEIS das skins; aqui viram a skin (sem repetir), com nome em português.
-function parseOwned(j, content) {
+// Preço de loja (VP) de cada skin: a oferta é sempre do nível 1 da skin. /store/v1/offers é da própria conta.
+function parsePrices(j, content) {
+  const out = {};
+  for (const o of arr(obj(j) && j.Offers).slice(0, 20000)) {
+    const cost = count(obj(o && o.Cost) && o.Cost[CUR.vp]);
+    const r = arr(o && o.Rewards)[0];
+    const skin = cost && r && lc(r.ItemTypeID) === SKIN_LEVEL_TYPE ? content.levels[uuidOf(r.ItemID)] : '';
+    if (skin && out[skin] == null) out[skin] = cost;
+  }
+  return out;
+}
+// Skins que a conta COMPROU: a Riot lista os NÍVEIS das skins; aqui viram a skin (sem repetir), com nome em português
+// e preço de loja. Ficam de fora as grátis, as padrão e as de passe de batalha ou contrato (content.skins[x][2] = 0).
+function parseOwned(j, content, prices) {
   if (!obj(j)) fail('bad');
   let list = j.Entitlements;
   if (!Array.isArray(list)) {
@@ -124,9 +138,10 @@ function parseOwned(j, content) {
   for (const e of list.slice(0, 20000)) {
     const level = uuidOf(e && e.ItemID);
     const skin = level && content.levels[level];
-    if (!skin || seen.has(skin) || !content.skins[skin]) continue;
+    if (!skin || seen.has(skin) || !content.skins[skin] || !content.skins[skin][2]) continue;
     seen.add(skin);
-    out.push({ uuid: skin, name: content.skins[skin][0] });
+    const price = prices && prices[skin] != null ? prices[skin] : null;
+    out.push(price != null ? { uuid: skin, name: content.skins[skin][0], price } : { uuid: skin, name: content.skins[skin][0] });
     if (out.length >= 3000) break;
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
@@ -171,16 +186,27 @@ function iconPath(raw) {
   if (u.protocol !== 'https:' || u.hostname !== MEDIA_HOST || u.port || u.username || u.password || u.search || !ICON_RE.test(u.pathname)) return '';
   return u.pathname;
 }
-// Resumo das skins e ranks do valorant-api.com: { skins: {skin: [nome, ícone]}, levels: {nível: skin}, tiers: {n: nome} }
-function compactContent(skinsJson, tiersJson, at) {
+// Resumo das skins e ranks do valorant-api.com: { skins: {skin: [nome, ícone, comprável 1|0]}, levels: {nível: skin},
+// tiers: {n: nome} }. O ícone preferido é o do nível 1: o ícone "da skin" às vezes é um X de imagem faltando.
+function compactContent(skinsJson, tiersJson, contractsJson, at) {
   const skins = {}, levels = {}, tiers = {};
   for (const s of arr(skinsJson && skinsJson.data).slice(0, 20000)) {
     const id = uuidOf(s && s.uuid);
     if (!id) continue;
     const lv = arr(s.levels), ch = arr(s.chromas);
-    const icon = iconPath(s.displayIcon) || iconPath(lv[0] && lv[0].displayIcon) || iconPath(ch[0] && ch[0].displayIcon) || iconPath(ch[0] && ch[0].fullRender);
-    skins[id] = [clean(s.displayName, 80), icon];
+    const icon = iconPath(lv[0] && lv[0].displayIcon) || iconPath(ch[0] && ch[0].displayIcon) || iconPath(s.displayIcon) || iconPath(ch[0] && ch[0].fullRender);
+    skins[id] = [clean(s.displayName, 80), icon, uuidOf(s.contentTierUuid) ? 1 : 0];
     for (const l of lv.slice(0, 50)) { const lid = uuidOf(l && l.uuid); if (lid) levels[lid] = id; }
+  }
+  // recompensas de passe de batalha, passes de evento e contratos de agente: não são compradas
+  for (const c of arr(contractsJson && contractsJson.data).slice(0, 2000)) {
+    for (const ch of arr(obj(c && c.content) && c.content.chapters).slice(0, 200)) {
+      const rewards = arr(ch && ch.levels).map(l => l && l.reward).concat(arr(ch && ch.freeRewards));
+      for (const r of rewards.slice(0, 500)) {
+        const skin = obj(r) && r.type === 'EquippableSkinLevel' ? levels[uuidOf(r.uuid)] : '';
+        if (skin && skins[skin]) skins[skin][2] = 0;
+      }
+    }
   }
   const eps = arr(tiersJson && tiersJson.data);
   const last = eps[eps.length - 1];
@@ -188,7 +214,7 @@ function compactContent(skinsJson, tiersJson, at) {
     if (t && Number.isInteger(t.tier) && t.tier >= 0 && t.tier < 100 && !/^unused/i.test(t.tierName || '')) tiers[t.tier] = sentence(clean(t.tierName, 40));
   }
   if (!Object.keys(skins).length || !Object.keys(tiers).length) fail('bad');
-  return { v: 1, at, lang: LANG, skins, levels, tiers };
+  return { v: 2, at, lang: LANG, skins, levels, tiers };
 }
 // PNG conferido sem decodificar: assinatura, IHDR e largura/altura (bytes 16-23) dentro do limite. Um PNG pequeno
 // que se diz 20000x20000 ocuparia GBs ao ser aberto: nunca chega ao nativeImage nem à janela.
@@ -380,11 +406,12 @@ function create(deps) {
     if (contentJob) return contentJob;
     contentJob = (async () => {
       try {
-        const [skins, tiers] = await Promise.all([
+        const [skins, tiers, contracts] = await Promise.all([
           vapi('/v1/weapons/skins?language=' + LANG, VAPI_MAX_SKINS),
-          vapi('/v1/competitivetiers?language=' + LANG, VAPI_MAX_SMALL)
+          vapi('/v1/competitivetiers?language=' + LANG, VAPI_MAX_SMALL),
+          vapi('/v1/contracts', VAPI_MAX_SMALL)
         ]);
-        content = compactContent(skins, tiers, now());
+        content = compactContent(skins, tiers, contracts, now());
         contentFailAt = 0;
         writeFileAtomic(nodePath.join(cacheDir(), CONTENT_FILE), JSON.stringify(content));
         return content;
@@ -404,7 +431,7 @@ function create(deps) {
     if (!content) {
       if (!diskJob) diskJob = readCache(CONTENT_FILE).finally(() => { diskJob = null; });
       const c = await diskJob;
-      if (!content && obj(c) && c.v === 1 && c.lang === LANG && typeof c.at === 'number' && obj(c.skins) && obj(c.levels) && obj(c.tiers)) content = c;
+      if (!content && obj(c) && c.v === 2 && c.lang === LANG && typeof c.at === 'number' && obj(c.skins) && obj(c.levels) && obj(c.tiers)) content = c;
       if (fresh(content)) return content;
     }
     if (content) return resting(contentFailAt) ? content : orStale(refreshContent(), content, opts.wait);
@@ -433,13 +460,19 @@ function create(deps) {
     const storefront = () => pd('/store/v3/storefront/' + puuid, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, headers), body: '{}' })
       .catch(e => { if (e.status === 404 || e.status === 405) return pd('/store/v2/storefront/' + puuid); throw e; });
     const at = now();
+    const prices = Promise.all([pd('/store/v1/offers/'), cont]).then(([j, c]) => (c ? parsePrices(j, c) : null)).catch(() => null); // sem preços: skins sem valor
     const [wallet, owned, store, mmr, xp] = await Promise.allSettled([
       pd('/store/v1/wallet/' + puuid).then(parseWallet),
-      Promise.all([pd('/store/v1/entitlements/' + puuid + '/' + SKIN_LEVEL_TYPE), cont]).then(([j, c]) => c ? parseOwned(j, c) : fail('network')),
+      Promise.all([pd('/store/v1/entitlements/' + puuid + '/' + SKIN_LEVEL_TYPE), cont, prices]).then(([j, c, p]) => c ? parseOwned(j, c, p) : fail('network')),
       Promise.all([storefront(), cont]).then(([j, c]) => parseStore(j, c, at)),
       Promise.all([pd('/mmr/v1/players/' + puuid), cont]).then(([j, c]) => parseRank(j, c)),
       pd('/account-xp/v1/players/' + puuid).then(parseLevel)
     ]);
+    // card equipado (vira a foto da conta): opcional, uma falha aqui não conta como parte faltando
+    const card = await pd('/personalization/v2/players/' + puuid + '/playerloadout')
+      .then(j => uuidOf(obj(j && j.Identity) && j.Identity.PlayerCardID))
+      .then(id => (id ? cardImage(id) : null))
+      .catch(() => null);
     const parts = { wallet, skins: owned, store, rank: mmr, level: xp };
     const missing = Object.keys(parts).filter(k => parts[k].status !== 'fulfilled');
     if (missing.length === 5) {
@@ -451,7 +484,7 @@ function create(deps) {
     return {
       ok: true, puuid, riotId, shard, at: new Date(at).toISOString(),
       rank: val('rank'), level: val('level'), wallet: val('wallet'),
-      store: s ? s.store : null, night: s ? s.night : null, skins: val('skins'),
+      store: s ? s.store : null, night: s ? s.night : null, skins: val('skins'), card,
       missing // partes que falharam agora (a janela mantém o que já tinha delas)
     };
   }
@@ -464,8 +497,23 @@ function create(deps) {
     return snapJob;
   }
 
+  // Arte quadrada do card equipado (media.valorant-api.com/playercards/<uuid>/smallart.png), só dentro da leitura
+  // pedida pelo botão. Não vai para o cache em disco: fica no cofre, como foto da conta.
+  async function cardImage(id) {
+    let res;
+    try {
+      res = await fetchFn(mediaBase + '/playercards/' + id + '/smallart.png', { method: 'GET', headers: { Accept: 'image/png' }, redirect: 'error', signal: AbortSignal.timeout(IMG_TIMEOUT_MS) });
+    } catch { return null; }
+    if (!res.ok) { discard(res); return null; }
+    const buf = await readCapped(res, CARD_MAX).catch(() => null);
+    if (!pngOk(buf)) return null;
+    return { uuid: id, src: 'data:image/png;base64,' + buf.toString('base64') };
+  }
+
   /* ---- imagens das skins: cache em disco → media.valorant-api.com (só quando a janela pede a internet) ---- */
-  const imgFile = id => nodePath.join(cacheDir(), 'img', id + '.png');
+  // 1.0.9: pasta nova (o ícone preferido mudou; a antiga podia ter o X de imagem faltando) e a antiga sai do disco
+  const imgFile = id => nodePath.join(cacheDir(), 'img2', id + '.png');
+  Promise.resolve().then(() => fsp.rm(nodePath.join(cacheDir(), 'img'), { recursive: true, force: true })).catch(() => {});
   async function downloadImage(id, c) {
     const skin = c.skins[id] ? id : c.levels[id];
     const icon = skin && c.skins[skin] ? c.skins[skin][1] : '';
@@ -514,7 +562,8 @@ function create(deps) {
   async function prune(keep) {
     const k = new Set(arr(keep).slice(0, 20000).map(uuidOf).filter(Boolean));
     await Promise.all([...imgJobs.values()]);
-    const dir = nodePath.join(cacheDir(), 'img');
+    const dir = nodePath.join(cacheDir(), 'img2');
+    await fsp.rm(nodePath.join(cacheDir(), 'img'), { recursive: true, force: true }).catch(() => {}); // pasta da 1.0.8
     if (!k.size) { await fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return { ok: true }; }
     let names = [];
     try { names = await fsp.readdir(dir); } catch { return { ok: true }; }
@@ -527,4 +576,4 @@ function create(deps) {
   return { snapshot, images, prune };
 }
 
-module.exports = { create, pngOk, parseLockfile, shardFor, sentence, riotIdOf, parseWallet, parseLevel, parseRank, parseOwned, parseStore, compactContent, iconPath, MSG, PLATFORM, CUR, SKIN_LEVEL_TYPE };
+module.exports = { create, pngOk, parseLockfile, shardFor, sentence, riotIdOf, parseWallet, parseLevel, parseRank, parseOwned, parsePrices, parseStore, compactContent, iconPath, MSG, PLATFORM, CUR, SKIN_LEVEL_TYPE };

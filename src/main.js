@@ -594,6 +594,34 @@ async function steamDownloadAvatar(url) {
   if (src.length > MC_MAX_DATA_URL) mcFail('bad');
   return src;
 }
+// Nível da Steam: só aparece na página pública do perfil (o XML não traz). Opcional: perfil privado ou qualquer
+// falha → null. Sem redirecionamento: com link personalizado, /profiles/<id64> iria para /id/<nome>, então já vai direto.
+const STEAM_MAX_HTML = 768 * 1024;
+async function steamLevel(id64, custom) {
+  try {
+    const path = custom && STEAM_VANITY_RE.test(custom) ? 'id/' + encodeURIComponent(custom) : 'profiles/' + id64;
+    const res = await steamGet(STEAM_BASE + path + '/', 'text/html');
+    if (!res.ok || !res.body) { mcDiscard(res); return null; }
+    const reader = res.body.getReader();
+    let text = '', total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        text += Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('latin1');
+        if (/friendPlayerLevelNum">\s*\d+\s*</.test(text)) break;
+        if (total >= STEAM_MAX_HTML) break;
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+    const m = /<span class="friendPlayerLevelNum">\s*(\d{1,5})\s*<\/span>/.exec(text);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
 async function steamLookup(ref) {
   try {
     const res = await steamGet(STEAM_BASE + ref.kind + '/' + encodeURIComponent(ref.id) + '/?xml=1', 'text/xml,application/xml');
@@ -606,10 +634,10 @@ async function steamLookup(ref) {
     if (!steamId64Ok(id64) || vac == null || !/^\d+$/.test(vac)) mcFail('bad');
     const avatarUrl = steamAvatarUrl(tag('avatarFull') || '') || steamAvatarUrl(tag('avatarMedium') || '');
     if (!avatarUrl) mcFail('bad');
-    const src = await steamDownloadAvatar(avatarUrl);
+    const [src, level] = await Promise.all([steamDownloadAvatar(avatarUrl), steamLevel(id64, tag('customURL'))]);
     const trade = (tag('tradeBanState') || '').toLowerCase();
     return {
-      ok: true, id64, src,
+      ok: true, id64, src, level,
       name: (tag('steamID') || '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 64),
       vac: Number(vac) > 0,
       trade: !!trade && trade !== 'none',

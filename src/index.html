@@ -420,6 +420,8 @@ details.forgot .btn-row{justify-content:center}
 @media (max-width:640px){.tile .card-stage>.mc-still{--s:3.8px}}
 .tile .card-stage.is-img>.av{position:absolute;inset:0;width:100%;height:100%;border-radius:0;box-shadow:none;background:none}
 .tile .card-stage.is-img::before{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.28))}
+.tile .card-stage.is-pfp .av-md{--av:116px;border-radius:22px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 0 44px -18px hsl(var(--hue,275) 90% 60% / .6)}
+.hero-lvl{margin-right:12px}
 /* monograma: letra grande e fina num anel neon (matiz roxa estável por conta) */
 .tile .card-stage.is-mono .av-md{--av:108px;border-radius:50%}
 .card.tile .av-mono,.card.tile:is(:hover,:focus-within) .av-mono{background:radial-gradient(120% 90% at 50% 0%,hsl(var(--hue,275) 85% 62% / .2),transparent 62%),linear-gradient(180deg,var(--mono-a),var(--mono-b));box-shadow:inset 0 0 0 1px hsl(var(--hue,275) 90% 70% / .36),0 0 calc(var(--av)*.5) calc(var(--av)*-.32) hsl(var(--hue,275) 90% 60% / .5);color:hsl(var(--hue,275) 95% var(--mono-l));font-weight:300;font-size:calc(var(--av)*.44);letter-spacing:0}
@@ -564,12 +566,13 @@ details.fold[open]>.fold-body{animation:rise-sm var(--t-med) var(--ease) both}
 .v-offers,.v-grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .v-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;max-height:360px;overflow-y:auto;overscroll-behavior:contain;padding:6px 2px 2px 0}
 .v-offers li,.v-grid li{display:flex;flex-direction:column;gap:2px;min-width:0;padding:8px 10px;border-radius:var(--r-sm);background:var(--surface)}
-.v-pic{display:grid;place-items:center;height:46px}
-.v-grid .v-pic{height:32px}
-.v-pic img{max-width:100%;max-height:100%;object-fit:contain;-webkit-user-drag:none;user-select:none;animation:fade-in var(--t-med) var(--ease) both}
+.v-pic{display:block;position:relative;height:56px;overflow:hidden}
+.v-grid .v-pic{height:36px}
+.v-pic img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;-webkit-user-drag:none;user-select:none;animation:fade-in var(--t-med) var(--ease) both}
 .v-n{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .v-grid .v-n{font-size:11.5px;color:var(--text-2)}
 .v-p{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.v-worth{color:var(--accent-fg);font-variant-numeric:tabular-nums}
 .v-off{color:var(--accent-fg);font-weight:500}
 details.v-skins>summary{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2);padding:4px 0;border-radius:6px;transition:color var(--t-fast) var(--ease)}
 details.v-skins>summary:hover,details.v-skins[open]>summary{color:var(--text)}
@@ -670,7 +673,7 @@ details.more[open]>.more-body{animation:rise-sm var(--t-med) var(--ease) both}
 .av-md{--av:76px}
 .av-lg{--av:88px}
 .av-xl{--av:128px}
-.av-img{display:block;width:100%;height:100%;object-fit:cover;-webkit-user-drag:none;user-select:none}
+.av-img{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;-webkit-user-drag:none;user-select:none}
 .av.av-image{box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
 .av-mono{background:radial-gradient(100% 100% at 50% 0%,var(--accent-soft),transparent 70%),var(--surface-2);box-shadow:inset 0 0 0 1px var(--neon-line),0 0 calc(var(--av)*.4) calc(var(--av)*-.3) var(--glow);color:var(--accent-fg);font-family:var(--font-display);font-weight:500;font-size:calc(var(--av)*.4);letter-spacing:.01em;line-height:1}
 .av-xs.av-mono{box-shadow:inset 0 0 0 1px var(--neon-line);font-size:10px}
@@ -811,6 +814,8 @@ button.bar-row:hover .bar-fill{box-shadow:0 0 10px var(--glow)}
 .sec-group{display:flex;flex-direction:column;gap:2px}
 .sec-group+.sec-group{padding-top:8px;border-top:1px solid var(--line)}
 .sec-group>p{padding:0 8px}
+.sec-acts{display:flex;justify-content:flex-end;padding:2px 4px 0}
+.sec-ignored{display:flex;align-items:center;gap:8px;margin-top:14px}
 .all-good{display:flex;align-items:center;gap:12px;padding:18px 0 0;border-top:1px solid var(--line);color:var(--text)}
 .all-good>.i{color:var(--success);width:22px;height:22px}
 
@@ -1471,10 +1476,15 @@ function normalizeAvatar(v) {
   const m = AVATAR_RE.exec(v.src);
   if (!m) return null;
   if (v.type === 'image') return { type: 'image', src: v.src };
+  if (v.type === 'valcard') {
+    const uuid = String(v.uuid == null ? '' : v.uuid).toLowerCase();
+    return m[1] === 'png' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid) ? { type: 'valcard', src: v.src, uuid } : null;
+  }
   if (v.type === 'steam') {
     const id64 = String(v.id64 == null ? '' : v.id64);
     if (!steamId64Ok(id64)) return null;
-    return { type: 'steam', src: v.src, id64, name: str(v.name, 64).trim(), vac: !!v.vac, trade: !!v.trade, limited: !!v.limited, fetchedAt: validISO(v.fetchedAt) };
+    const level = typeof v.level === 'number' && Number.isInteger(v.level) && v.level >= 0 && v.level <= 100000 ? v.level : null;
+    return { type: 'steam', src: v.src, id64, name: str(v.name, 64).trim(), vac: !!v.vac, trade: !!v.trade, limited: !!v.limited, level, fetchedAt: validISO(v.fetchedAt) };
   }
   if (v.type !== 'mcskin' || m[1] !== 'png') return null;
   const d = pngSize(v.src);
@@ -1795,7 +1805,7 @@ function normalizeValorant(v) {
     store: shop(v.store, false), night: shop(v.night, true),
     skins: (Array.isArray(v.skins) ? v.skins.slice(0, 6000) : [])
       .filter(s => o(s) && VAL_UUID_RE.test(String(s.uuid || '')) && !seen.has(s.uuid) && seen.add(s.uuid))
-      .slice(0, 3000).map(s => ({ uuid: s.uuid, name: str(s.name, 80) }))
+      .slice(0, 3000).map(s => { const p = n(s.price, 1e5); return p != null ? { uuid: s.uuid, name: str(s.name, 80), price: p } : { uuid: s.uuid, name: str(s.name, 80) }; })
   };
 }
 function normalizeAccount(a) {
@@ -1811,6 +1821,7 @@ function normalizeAccount(a) {
     label: str(a.label, 120), status: STATUS_MAP[a.status] ? a.status : 'principal', favorite: !!a.favorite,
     login: str(a.login, 200), email: str(a.email, 200), password: str(a.password, 1000),
     passwordUpdatedAt: validISO(a.passwordUpdatedAt),
+    reuseOk: str(a.reuseOk, 40),
     accountId: str(a.accountId, 200), profileUrl: str(a.profileUrl, 500),
     twoFA: TWOFA_MAP[a.twoFA] ? a.twoFA : '', phone: str(a.phone, 60), recoveryEmail: str(a.recoveryEmail, 200),
     backupCodes: str(a.backupCodes, 5000), region: str(a.region, 60),
@@ -1923,7 +1934,7 @@ function avatarHTML(a, size) {
     if (size === 'md') return skinStillHTML(a);
     return skinViewerHTML(av, size === 'xl' ? { size: 'lg', mode: 'spin' } : { size: size === 'lg' ? 'md' : 'sm', mode: 'hover' });
   }
-  if (av && (av.type === 'image' || av.type === 'steam')) return html`<span class="av av-${size} av-image"><img class="av-img" src="${av.src}" alt="" draggable="false"></span>`;
+  if (av && (av.type === 'image' || av.type === 'steam' || av.type === 'valcard')) return html`<span class="av av-${size} av-image"><img class="av-img" src="${av.src}" alt="" draggable="false"></span>`;
   return html`<span class="av av-${size} av-mono" aria-hidden="true">${monogram(idTitle(a))}</span>`;
 }
 function avatarSig(av) {
@@ -2162,7 +2173,7 @@ function wireAvatarField(form, base) {
     b.disabled = false; b.removeAttribute('aria-busy'); label.textContent = 'Buscar perfil da Steam';
     if (my !== tok || !form.isConnected) return;
     if (!r || !r.ok) { setMsg((r && r.message) || 'Não foi possível buscar o perfil.', true); return; }
-    const av = normalizeAvatar({ type: 'steam', src: r.src, id64: r.id64, name: r.name, vac: r.vac, trade: r.trade, limited: r.limited, fetchedAt: nowISO() });
+    const av = normalizeAvatar({ type: 'steam', src: r.src, id64: r.id64, name: r.name, vac: r.vac, trade: r.trade, limited: r.limited, level: r.level, fetchedAt: nowISO() });
     if (!av) { setMsg('O perfil recebido não é válido.', true); return; }
     const pu = form.elements.namedItem('profileUrl');
     if (pu && !pu.value.trim()) { pu.value = 'https://steamcommunity.com/profiles/' + av.id64; pu.dispatchEvent(new Event('input', { bubbles: true })); }
@@ -2542,9 +2553,9 @@ async function refreshSteamProfiles(force, onProgress) {
     const a = findAccount(id);
     if (!a || !a.avatar || a.avatar.type !== 'steam' || a.avatar.id64 !== r.id64) continue; // trocou de perfil durante a busca
     const cur = a.avatar;
-    const nv = normalizeAvatar({ type: 'steam', src: r.src, id64: cur.id64, name: r.name || cur.name, vac: r.vac, trade: r.trade, limited: r.limited, fetchedAt: t });
+    const nv = normalizeAvatar({ type: 'steam', src: r.src, id64: cur.id64, name: r.name || cur.name, vac: r.vac, trade: r.trade, limited: r.limited, level: r.level != null ? r.level : cur.level, fetchedAt: t });
     if (!nv) continue;
-    const changed = cur.src !== nv.src || cur.name !== nv.name || cur.vac !== nv.vac || cur.trade !== nv.trade || cur.limited !== nv.limited;
+    const changed = cur.src !== nv.src || cur.name !== nv.name || cur.vac !== nv.vac || cur.trade !== nv.trade || cur.limited !== nv.limited || cur.level !== nv.level;
     if (changed) visible++;
     next.set(id, { nv, oldName: cur.name, changed });
   }
@@ -3216,7 +3227,10 @@ function getAudit() {
   const accs = all.filter(a => a.status !== 'vendida');
   const byPw = new Map();
   for (const a of accs) if (a.password) { if (!byPw.has(a.password)) byPw.set(a.password, []); byPw.get(a.password).push(a); }
-  const reusedGroups = Array.from(byPw.values()).filter(g => g.length > 1);
+  const reuseOk = a => !!a.reuseOk && a.reuseOk === (a.passwordUpdatedAt || a.createdAt);
+  const groups = Array.from(byPw.values()).filter(g => g.length > 1);
+  const reusedGroups = groups.filter(g => !g.every(reuseOk)); // grupo inteiro ignorado → sem aviso, sem ícone, sem desconto
+  const ignoredReuse = groups.length - reusedGroups.length;
   const reusedIds = new Set(reusedGroups.flat().map(a => a.id));
   const weak = [], no2fa = [], old = [], nopass = [];
   const byId = new Map();
@@ -3245,7 +3259,7 @@ function getAudit() {
   });
   const alertIds = new Set(accs.filter(a => { const is = byId.get(a.id); return is.includes('reused') || is.includes('weak'); }).map(a => a.id));
   auditCache = {
-    reusedGroups, weak, no2fa, old, nopass, byId,
+    reusedGroups, ignoredReuse, weak, no2fa, old, nopass, byId,
     considered: accs.length, skipped: all.length - accs.length,
     score: pts.length ? Math.round(pts.reduce((x, y) => x + y, 0) / pts.length) : 100,
     alertCount: alertIds.size
@@ -3603,7 +3617,8 @@ function pmarkHTML(a, cls) {
 // Linha "jogo principal · rank  +N" (os outros jogos ficam na dica e para leitores de tela)
 function gameLineHTML(a) {
   const games = a.games;
-  if (!games.length) return html`<span class="card-game">${platformName(a)}</span>`;
+  const lvl = a.avatar && a.avatar.type === 'steam' && a.avatar.level != null ? 'Nível ' + fmtInt(a.avatar.level) : '';
+  if (!games.length) return html`<span class="card-game">${platformName(a)}${lvl ? html`<span class="sep" aria-hidden="true">·</span><span class="rk">${lvl}</span>` : ''}</span>`;
   const g = games[0], rest = games.slice(1);
   const restText = rest.map(x => x.game + (x.rank ? ' (' + x.rank + ')' : '')).join(', ');
   return html`<span class="card-game" title="${games.map(x => x.game + (x.rank ? ' — ' + x.rank : '')).join('\n')}"><span class="sr-only">${platformName(a)} · </span>${g.game}${g.rank ? html`<span class="sep" aria-hidden="true">·</span><span class="rk">${g.rank}</span>` : ''}${rest.length ? html`<span class="more" aria-hidden="true">+${rest.length}</span><span class="sr-only"> e mais ${plural(rest.length, 'jogo', 'jogos')}: ${restText}</span>` : ''}</span>`;
@@ -3645,7 +3660,7 @@ function accHue(a) {
 // Ações rápidas (copiar login/senha) aparecem no hover/foco sobre o palco; estrela só se favorita; um ícone se há problema.
 function tileHTML(a, i) {
   const av = a.avatar;
-  const kind = av && av.type === 'mcskin' ? 'is-3d' : av && (av.type === 'image' || av.type === 'steam') ? 'is-img' : 'is-mono';
+  const kind = av && av.type === 'mcskin' ? 'is-3d' : av && av.type === 'image' ? 'is-img' : av && (av.type === 'steam' || av.type === 'valcard') ? 'is-pfp' : 'is-mono';
   return html`<article class="card tile" data-key="${a.id}" draggable="true" style="--i:${Math.min(i || 0, 16)};--hue:${accHue(a)}">
     <div class="card-stage ${kind}">${avatarHTML(a, 'md')}</div>
     <h3 class="card-name">${cardOpenHTML(a)}</h3>
@@ -3712,7 +3727,7 @@ function securityHTML() {
   const parts = [];
   if (au.reusedGroups.length) {
     parts.push(section('alert', 'danger', 'Senhas repetidas', 'Se uma vazar, as outras ficam expostas.', au.reusedGroups.reduce((n, g) => n + g.length, 0),
-      html`${au.reusedGroups.map(g => html`<div class="sec-group"><ul class="plain-list">${g.map(a => accItem(a))}</ul></div>`)}`));
+      html`${au.reusedGroups.map(g => html`<div class="sec-group"><ul class="plain-list">${g.map(a => accItem(a))}</ul><div class="sec-acts"><button type="button" class="btn sm ghost" data-act="ignore-reuse" data-ids="${g.map(a => a.id).join(',')}" title="Senha repetida de propósito (ex.: alts): o aviso some até alguma dessas senhas mudar">Ignorar</button></div></div>`)}`));
   }
   if (au.weak.length) {
     parts.push(section('alert', 'warning', 'Senhas fracas', 'Edite e use o gerador de senha forte.', au.weak.length,
@@ -3739,7 +3754,8 @@ function securityHTML() {
         <p class="small faint">${plural(au.considered, 'conta analisada', 'contas analisadas')} aqui mesmo, sem internet${au.skipped ? ' · ' + plural(au.skipped, 'vendida ignorada', 'vendidas ignoradas') : ''}</p>
       </div>
     </div>
-    ${parts.length ? html`<div class="sec-sections">${parts}</div>` : html`<div class="all-good">${icon('shield-check')}<div><strong>Tudo certo!</strong><p class="small muted">Nenhum problema encontrado nas suas contas.</p></div></div>`}`;
+    ${parts.length ? html`<div class="sec-sections">${parts}</div>` : html`<div class="all-good">${icon('shield-check')}<div><strong>Tudo certo!</strong><p class="small muted">Nenhum problema encontrado nas suas contas.</p></div></div>`}
+    ${au.ignoredReuse ? html`<p class="sec-ignored small faint">${plural(au.ignoredReuse, 'aviso de senha repetida ignorado', 'avisos de senha repetida ignorados')}<button type="button" class="btn sm ghost" data-act="unignore-reuse">Mostrar de novo</button></p>` : ''}`;
 }
 
 /* =========================================================
@@ -3780,7 +3796,15 @@ function valShopHTML(title, when, shop, night) {
     <ul class="v-offers">${shop.offers.map(o => html`<li title="${o.name}">${valPicHTML(o.uuid, true)}<span class="v-n">${o.name || 'Skin'}</span><span class="v-p">${o.cost != null ? fmtInt(o.cost) + ' VP' : ''}${night && o.discount ? html` <span class="v-off">−${o.discount}%</span>` : ''}</span></li>`)}</ul></div>`;
 }
 function valSkinsHTML(v) {
-  return html`<ul class="v-grid">${v.skins.map(s => html`<li title="${s.name}">${valPicHTML(s.uuid)}<span class="v-n">${s.name || 'Skin'}</span></li>`)}</ul>`;
+  return html`<ul class="v-grid">${v.skins.map(s => html`<li title="${s.price != null ? s.name + ' · ' + fmtInt(s.price) + ' VP' : s.name}">${valPicHTML(s.uuid)}<span class="v-n">${s.name || 'Skin'}</span></li>`)}</ul>`;
+}
+// Valor da conta: soma dos preços de loja (VP) das skins compradas; as sem preço conhecido ficam de fora (e são contadas)
+function valWorth(v) {
+  const priced = v.skins.filter(s => s.price != null);
+  if (!priced.length) return '';
+  const total = priced.reduce((t, s) => t + s.price, 0), left = v.skins.length - priced.length;
+  const tip = 'Valor da conta: soma dos preços de loja das skins compradas' + (left ? ' (' + plural(left, 'skin sem preço na loja fica', 'skins sem preço na loja ficam') + ' de fora)' : '');
+  return html`<span class="v-worth" title="${tip}"> · ${left ? '≈ ' : ''}${fmtInt(total)} VP</span>`;
 }
 // Só nas contas com a linha "Valorant" (ou já ligadas); no navegador não aparece
 function valorantSecHTML(a) {
@@ -3803,7 +3827,7 @@ function valorantSecHTML(a) {
         ${line.length ? html`<p class="v-line">${line.join(' · ')}</p>` : ''}
         ${v && live(v.store) ? valShopHTML('Loja de hoje', 'troca em', v.store, false) : ''}
         ${v && live(v.night) ? valShopHTML('Mercado noturno', 'acaba em', v.night, true) : ''}
-        ${v && v.skins.length ? html`<details class="v-skins" data-vskins="${a.id}"${was ? raw(' open') : ''}><summary>Skins (${fmtInt(v.skins.length)})<span class="chev" aria-hidden="true"></span></summary><div class="v-skins-body">${was ? valSkinsHTML(v) : ''}</div></details>` : ''}
+        ${v && v.skins.length ? html`<details class="v-skins" data-vskins="${a.id}"${was ? raw(' open') : ''}><summary>Skins (${fmtInt(v.skins.length)})${valWorth(v)}<span class="chev" aria-hidden="true"></span></summary><div class="v-skins-body">${was ? valSkinsHTML(v) : ''}</div></details>` : ''}
         <div class="v-foot"><button type="button" class="btn sm ghost" data-act="val-refresh" data-id="${a.id}"${busy ? raw(' aria-busy="true" aria-disabled="true"') : ''}>${busy ? 'Lendo o Riot Client…' : 'Atualizar pelo Riot Client'}</button>${v && v.at ? html`<span class="small faint">atualizado ${relTime(v.at)}</span>` : ''}</div>
         <p class="v-note">Não oficial: lê a conta logada no Riot Client.</p>
       </section>`;
@@ -3909,7 +3933,7 @@ async function valorantRefresh(id) {
   if (!S.vault.settings.valorantAck) {
     const ok = await confirmDialog({
       title: 'Ler o Valorant pelo Riot Client?',
-      message: html`Isto <strong>não é oficial</strong>: o app lê a conta que está logada no Riot Client deste PC (rank, nível, VP, loja do dia e skins). Só leitura, só quando você clicar, sem usar sua senha da Riot. Nomes e imagens das skins vêm do valorant-api.com, um site da comunidade. A Riot não aprova ferramentas assim: use por sua conta e risco.`,
+      message: html`Isto <strong>não é oficial</strong>: o app lê a conta que está logada no Riot Client deste PC (rank, nível, VP, loja do dia, card e skins compradas com o preço de loja). Só leitura, só quando você clicar, sem usar sua senha da Riot. Nomes e imagens das skins vêm do valorant-api.com, um site da comunidade. A Riot não aprova ferramentas assim: use por sua conta e risco.`,
       confirmText: 'Entendi, continuar'
     });
     if (!ok || !alive()) return;
@@ -3966,6 +3990,11 @@ async function valorantRefresh(id) {
     const nv = x ? valMerge(x.valorant, r) : null;
     if (!nv) return;
     x.valorant = nv;
+    // o card equipado vira a foto da conta (só se ela não tem outra: foto escolhida, skin ou perfil da Steam ficam)
+    if (r.card && (!x.avatar || x.avatar.type === 'valcard')) {
+      const card = normalizeAvatar({ type: 'valcard', src: r.card.src, uuid: r.card.uuid });
+      if (card) x.avatar = card;
+    }
     // Sem mexer em x.updatedAt: é uma leitura, não uma edição (a mesclagem de backups compara essa data).
     // A data fica em valorant.at e na linha do jogo.
     // a linha do jogo acompanha: rank atual (e o Riot ID, se o nick estava vazio)
@@ -4058,7 +4087,7 @@ function detailHTML(a, moreOpen) {
         <h2 class="hero-nick"><span>${nick}</span>${nickG ? copyBtn(a.id, 'nick', nickG.id, 'nick') : (mc && mc.name) || (steam && steam.name) ? copyBtn(a.id, 'mcname', '', 'nick') : ''}</h2>
         <p class="hero-sub">${sub.join(' · ')}</p>
         ${uuid ? html`<p class="hero-uuid" title="UUID do jogador no Minecraft"><span>UUID</span><code>${uuid}</code></p>` : ''}
-        ${steam ? html`<p class="hero-uuid" title="SteamID64 do perfil"><span>SteamID</span><code>${steam.id64}</code></p>` : ''}
+        ${steam ? html`<p class="hero-uuid" title="SteamID64 do perfil">${steam.level != null ? html`<span>Nível</span><code class="hero-lvl">${fmtInt(steam.level)}</code>` : ''}<span>SteamID</span><code>${steam.id64}</code></p>` : ''}
         ${steam && (steam.vac || steam.trade || steam.limited) ? html`<p class="hero-flags">${steam.vac ? html`<span class="chip danger">VAC ban</span>` : ''}${steam.trade ? html`<span class="chip danger">Trade ban</span>` : ''}${steam.limited ? html`<span class="chip muted" title="Conta que ainda não gastou US$ 5 na Steam">Conta limitada</span>` : ''}</p>` : ''}
       </div>
       <div class="hero-acts">
@@ -4954,6 +4983,18 @@ document.addEventListener('click', async e => {
       const dlg = $('dialog[data-detail-id="' + CSS.escape(id) + '"]');
       if (dlg) dlg.close();
       deleteAccount(id);
+      break;
+    }
+    case 'ignore-reuse': {
+      const ids = new Set(String(el.dataset.ids || '').split(',').filter(Boolean));
+      if (!ids.size) return;
+      commit(v => { for (const a of v.accounts) if (ids.has(a.id) && a.password) a.reuseOk = a.passwordUpdatedAt || a.createdAt; });
+      toast('Aviso ignorado. Ele volta se alguma dessas senhas mudar.');
+      break;
+    }
+    case 'unignore-reuse': {
+      commit(v => { for (const a of v.accounts) a.reuseOk = ''; });
+      toast('Avisos de senha repetida de volta');
       break;
     }
     case 'toggle-fav': {
